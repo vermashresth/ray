@@ -38,38 +38,11 @@ if __name__ == "__main__":
     do_link("rllib")
     do_link("tune")
     do_link("autoscaler")
-    do_link("scripts")
     print("Created links.\n\nIf you run into issues initializing Ray, please "
           "ensure that your local repo and the installed Ray are in sync "
           "(pip install -U the latest wheels at "
           "https://ray.readthedocs.io/en/latest/installation.html, "
           "and ensure you are up-to-date on the master branch on git).\n\n"
           "Note that you may need to delete the package symlinks when pip "
-          "installing new Ray versions to prevent pip from overwriting files "
-          "in your git repo.")
-
-    # clean up tune
-    tune_home = os.path.abspath(os.path.join(ray.__file__, "../tune"))
-    local_home = os.path.abspath(os.path.join(os.path.dirname(__file__), "../tune"))
-    assert os.path.isdir(tune_home), tune_home
-    assert os.path.isdir(local_home), local_home
-    click.confirm(
-        "This will replace:\n  {}\nwith a symlink to:\n  {}".format(
-            tune_home, local_home),
-        abort=True)
-    if os.access(os.path.dirname(rllib_home), os.W_OK):
-        subprocess.check_call(["rm", "-rf", tune_home])
-        subprocess.check_call(["ln", "-s", local_home, tune_home])
-    else:
-        print("You don't have write permission to {}, using sudo:".format(
-            rllib_home))
-        subprocess.check_call(["sudo", "rm", "-rf", rllib_home])
-        subprocess.check_call(["sudo", "ln", "-s", local_home, rllib_home])
-    print("Created links.\n\nIf you run into issues initializing Ray, please "
-          "ensure that your local repo and the installed Ray is in sync "
-          "(pip install -U the latest wheels at "
-          "https://ray.readthedocs.io/en/latest/installation.html, "
-          "and ensure you are up-to-date on the master branch on git).\n\n"
-          "Note that you may need to delete the rllib symlink when pip "
           "installing new Ray versions to prevent pip from overwriting files "
           "in your git repo.")

@@ -85,20 +85,14 @@ class TorchPolicyGraph(PolicyGraph):
             loss_out.backward()
             # Note that return values are just references;
             # calling zero_grad will modify the values
-            grads = []
-            for p in self._model.parameters():
-                if p.grad is not None:
-                    grads.append(p.grad.data.numpy())
-                else:
-                    grads.append(None)
+            grads = [p.grad.data.numpy() for p in self._model.parameters()]
             return grads, {}
 
     @override(PolicyGraph)
     def apply_gradients(self, gradients):
         with self.lock:
             for g, p in zip(gradients, self._model.parameters()):
-                if g is not None:
-                    p.grad = torch.from_numpy(g)
+                p.grad = torch.from_numpy(g)
             self._optimizer.step()
             return {}
 

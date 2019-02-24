@@ -6,10 +6,10 @@ import numpy as np
 
 from ray.rllib.offline.input_reader import InputReader
 from ray.rllib.offline.json_reader import JsonReader
-from ray.rllib.utils.annotations import override, DeveloperAPI
+from ray.rllib.utils.annotations import override, PublicAPI
 
 
-@DeveloperAPI
+@PublicAPI
 class MixedInput(InputReader):
     """Mixes input from a number of other input sources.
 
@@ -21,7 +21,7 @@ class MixedInput(InputReader):
         }, ioctx)
     """
 
-    @DeveloperAPI
+    @PublicAPI
     def __init__(self, dist, ioctx):
         """Initialize a MixedInput.
 

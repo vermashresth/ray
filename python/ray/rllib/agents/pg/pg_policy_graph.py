@@ -67,7 +67,6 @@ class PGPolicyGraph(TFPolicyGraph):
             sess,
             obs_input=obs,
             action_sampler=action_dist.sample(),
-            action_prob=action_dist.sampled_action_prob(),
             loss=self.model.loss() + loss,
             loss_inputs=loss_in,
             state_inputs=self.model.state_in,

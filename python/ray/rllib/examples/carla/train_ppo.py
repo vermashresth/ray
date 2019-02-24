@@ -21,7 +21,7 @@ env_config.update({
 })
 register_carla_model()
 
-ray.init()
+ray.init(redirect_output=True)
 run_experiments({
     "carla": {
         "run": "PPO",

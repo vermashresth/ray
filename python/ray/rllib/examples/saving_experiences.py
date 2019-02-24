@@ -33,7 +33,6 @@ if __name__ == "__main__":
                 agent_index=0,
                 obs=obs,
                 actions=action,
-                action_prob=1.0,  # put the true action probability here
                 rewards=rew,
                 prev_actions=prev_action,
                 prev_rewards=prev_reward,
