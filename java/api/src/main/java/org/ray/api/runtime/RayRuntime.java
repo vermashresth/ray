@@ -7,7 +7,6 @@ import org.ray.api.WaitResult;
 import org.ray.api.function.RayFunc;
 import org.ray.api.id.UniqueId;
 import org.ray.api.options.ActorCreationOptions;
-import org.ray.api.options.BaseTaskOptions;
 import org.ray.api.options.CallOptions;
 
 /**
@@ -81,7 +80,7 @@ public interface RayRuntime {
    * @param args The arguments of the remote function.
    * @return The result object.
    */
-  RayObject call(RayFunc func, RayActor actor, Object[] args);
+  RayObject call(RayFunc func, RayActor<?> actor, Object[] args);
 
   /**
    * Create an actor on a remote node.

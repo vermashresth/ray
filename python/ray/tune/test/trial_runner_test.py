@@ -23,7 +23,7 @@ from ray.tune.result import (DEFAULT_RESULTS_DIR, TIMESTEPS_TOTAL, DONE,
 from ray.tune.logger import Logger
 from ray.tune.util import pin_in_object_store, get_pinned_object
 from ray.tune.experiment import Experiment
-from ray.tune.trial import Trial, Resources
+from ray.tune.trial import Trial, Resources, ExportFormat
 from ray.tune.trial_runner import TrialRunner
 from ray.tune.suggest import grid_search, BasicVariantGenerator
 from ray.tune.suggest.suggestion import (_MockSuggestionAlgorithm,
@@ -261,8 +261,8 @@ class TrainableFunctionApiTest(unittest.TestCase):
                 "run": "f1",
                 "local_dir": "/tmp/logdir",
                 "config": {
-                    "a" * 50: lambda spec: 5.0 / 7,
-                    "b" * 50: lambda spec: "long" * 40
+                    "a" * 50: tune.sample_from(lambda spec: 5.0 / 7),
+                    "b" * 50: tune.sample_from(lambda spec: "long" * 40),
                 },
             }
         })
@@ -679,6 +679,47 @@ class RunExperimentTest(unittest.TestCase):
             self.assertEqual(trial.status, Trial.TERMINATED)
             self.assertTrue(trial.has_checkpoint())
 
+    def testExportFormats(self):
+        class train(Trainable):
+            def _train(self):
+                return {"timesteps_this_iter": 1, "done": True}
+
+            def _export_model(self, export_formats, export_dir):
+                path = export_dir + "/exported"
+                with open(path, "w") as f:
+                    f.write("OK")
+                return {export_formats[0]: path}
+
+        trials = run_experiments({
+            "foo": {
+                "run": train,
+                "export_formats": ["format"]
+            }
+        })
+        for trial in trials:
+            self.assertEqual(trial.status, Trial.TERMINATED)
+            self.assertTrue(
+                os.path.exists(os.path.join(trial.logdir, "exported")))
+
+    def testInvalidExportFormats(self):
+        class train(Trainable):
+            def _train(self):
+                return {"timesteps_this_iter": 1, "done": True}
+
+            def _export_model(self, export_formats, export_dir):
+                ExportFormat.validate(export_formats)
+                return {}
+
+        def fail_trial():
+            run_experiments({
+                "foo": {
+                    "run": train,
+                    "export_formats": ["format"]
+                }
+            })
+
+        self.assertRaises(TuneError, fail_trial)
+
     def testDeprecatedResources(self):
         class train(Trainable):
             def _train(self):
@@ -848,7 +889,7 @@ class VariantGeneratorTest(unittest.TestCase):
         trials = self.generate_trials({
             "run": "PPO",
             "config": {
-                "qux": lambda spec: 2 + 2,
+                "qux": tune.sample_from(lambda spec: 2 + 2),
                 "bar": grid_search([True, False]),
                 "foo": grid_search([1, 2, 3]),
             },
@@ -863,8 +904,8 @@ class VariantGeneratorTest(unittest.TestCase):
             "run": "PPO",
             "config": {
                 "x": 1,
-                "y": lambda spec: spec.config.x + 1,
-                "z": lambda spec: spec.config.y + 1,
+                "y": tune.sample_from(lambda spec: spec.config.x + 1),
+                "z": tune.sample_from(lambda spec: spec.config.y + 1),
             },
         }, "condition_resolution")
         trials = list(trials)
@@ -876,7 +917,7 @@ class VariantGeneratorTest(unittest.TestCase):
             "run": "PPO",
             "config": {
                 "x": grid_search([1, 2]),
-                "y": lambda spec: spec.config.x * 100,
+                "y": tune.sample_from(lambda spec: spec.config.x * 100),
             },
         }, "dependent_lambda")
         trials = list(trials)
@@ -889,10 +930,10 @@ class VariantGeneratorTest(unittest.TestCase):
             "run": "PPO",
             "config": {
                 "x": grid_search([
-                    lambda spec: spec.config.y * 100,
-                    lambda spec: spec.config.y * 200
+                    tune.sample_from(lambda spec: spec.config.y * 100),
+                    tune.sample_from(lambda spec: spec.config.y * 200)
                 ]),
-                "y": lambda spec: 1,
+                "y": tune.sample_from(lambda spec: 1),
             },
         }, "dependent_grid_search")
         trials = list(trials)
@@ -920,7 +961,7 @@ class VariantGeneratorTest(unittest.TestCase):
                 self.generate_trials({
                     "run": "PPO",
                     "config": {
-                        "foo": lambda spec: spec.config.foo,
+                        "foo": tune.sample_from(lambda spec: spec.config.foo),
                     },
                 }, "recursive_dep"))
         except RecursiveDependencyError as e:
@@ -1007,8 +1048,8 @@ class TrialRunnerTest(unittest.TestCase):
             "foo": {
                 "run": "f1",
                 "config": {
-                    "a" * 50: lambda spec: 5.0 / 7,
-                    "b" * 50: lambda spec: "long" * 40
+                    "a" * 50: tune.sample_from(lambda spec: 5.0 / 7),
+                    "b" * 50: tune.sample_from(lambda spec: "long" * 40)
                 },
             }
         }
@@ -1794,6 +1835,33 @@ class TrialRunnerTest(unittest.TestCase):
         new_trial = runner2.get_trials()[0]
         self.assertTrue("callbacks" in new_trial.config)
         self.assertTrue("on_episode_start" in new_trial.config["callbacks"])
+        shutil.rmtree(tmpdir)
+
+    def testCheckpointOverwrite(self):
+        def count_checkpoints(cdir):
+            return sum((fname.startswith("experiment_state")
+                        and fname.endswith(".json"))
+                       for fname in os.listdir(cdir))
+
+        ray.init()
+        trial = Trial("__fake", checkpoint_freq=1)
+        tmpdir = tempfile.mkdtemp()
+        runner = TrialRunner(
+            BasicVariantGenerator(), metadata_checkpoint_dir=tmpdir)
+        runner.add_trial(trial)
+        for i in range(5):
+            runner.step()
+        # force checkpoint
+        runner.checkpoint()
+        self.assertEquals(count_checkpoints(tmpdir), 1)
+
+        runner2 = TrialRunner.restore(tmpdir)
+        for i in range(5):
+            runner2.step()
+        self.assertEquals(count_checkpoints(tmpdir), 2)
+
+        runner2.checkpoint()
+        self.assertEquals(count_checkpoints(tmpdir), 2)
         shutil.rmtree(tmpdir)
 
 
