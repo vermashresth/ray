@@ -6,6 +6,7 @@ RLlib is an open-source library for reinforcement learning that offers both a co
 .. image:: rllib-stack.svg
 
 Learn more about RLlib's design by reading the `ICML paper <https://arxiv.org/abs/1712.09381>`__.
+To get started, take a look over the `custom env example <https://github.com/ray-project/ray/blob/master/python/ray/rllib/examples/custom_env.py>`__ and the `API documentation <rllib-training.html>`__.
 
 Installation
 ------------
@@ -37,7 +38,7 @@ Environments
 * `RLlib Environments Overview <rllib-env.html>`__
 * `OpenAI Gym <rllib-env.html#openai-gym>`__
 * `Vectorized <rllib-env.html#vectorized>`__
-* `Multi-Agent <rllib-env.html#multi-agent>`__
+* `Multi-Agent and Hierarchical <rllib-env.html#multi-agent-and-hierarchical>`__
 * `Interfacing with External Agents <rllib-env.html#interfacing-with-external-agents>`__
 * `Batch Asynchronous <rllib-env.html#batch-asynchronous>`__
 
@@ -49,6 +50,8 @@ Algorithms
    -  `Distributed Prioritized Experience Replay (Ape-X) <rllib-algorithms.html#distributed-prioritized-experience-replay-ape-x>`__
 
    -  `Importance Weighted Actor-Learner Architecture (IMPALA) <rllib-algorithms.html#importance-weighted-actor-learner-architecture-impala>`__
+
+   -  `Asynchronous Proximal Policy Optimization (APPO) <rllib-algorithms.html#asynchronous-proximal-policy-optimization-appo>`__
 
 *  Gradient-based
 
@@ -72,6 +75,10 @@ Algorithms
 
    -  `QMIX Monotonic Value Factorisation (QMIX, VDN, IQN) <rllib-algorithms.html#qmix-monotonic-value-factorisation-qmix-vdn-iqn>`__
 
+*  Offline
+
+   -  `Advantage Re-Weighted Imitation Learning (MARWIL) <rllib-algorithms.html#advantage-re-weighted-imitation-learning-marwil>`__
+
 Models and Preprocessors
 ------------------------
 * `RLlib Models and Preprocessors Overview <rllib-models.html>`__
@@ -93,6 +100,7 @@ Development
 -----------
 
 * `Development Install <rllib-dev.html#development-install>`__
+* `API Stability <rllib-dev.html#api-stability>`__
 * `Features <rllib-dev.html#feature-development>`__
 * `Benchmarks <rllib-dev.html#benchmarks>`__
 * `Contributing Algorithms <rllib-dev.html#contributing-algorithms>`__
@@ -111,6 +119,11 @@ Package Reference
 * `ray.rllib.models <rllib-package-ref.html#module-ray.rllib.models>`__
 * `ray.rllib.optimizers <rllib-package-ref.html#module-ray.rllib.optimizers>`__
 * `ray.rllib.utils <rllib-package-ref.html#module-ray.rllib.utils>`__
+
+Examples
+--------
+
+You can find an index of RLlib code examples on `this page <rllib-examples.html>`__. This includes tuned hyperparameters, demo scripts on how to use specific features of RLlib, and several community examples of applications built on RLlib.
 
 Troubleshooting
 ---------------

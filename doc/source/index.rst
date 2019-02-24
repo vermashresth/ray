@@ -53,6 +53,7 @@ Ray comes with libraries that accelerate deep learning and reinforcement learnin
    :caption: Installation
 
    installation.rst
+   deploy-on-kubernetes.rst
    install-on-docker.rst
    installation-troubleshooting.rst
 
@@ -98,6 +99,7 @@ Ray comes with libraries that accelerate deep learning and reinforcement learnin
    rllib-dev.rst
    rllib-concepts.rst
    rllib-package-ref.rst
+   rllib-examples.rst
 
 .. toctree::
    :maxdepth: 1

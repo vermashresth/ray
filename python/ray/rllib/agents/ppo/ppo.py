@@ -44,6 +44,8 @@ DEFAULT_CONFIG = with_common_config({
     # Clip param for the value function. Note that this is sensitive to the
     # scale of the rewards. If your expected V is large, increase this.
     "vf_clip_param": 10.0,
+    # If specified, clip the global norm of gradients by this amount
+    "grad_clip": None,
     # Target value for KL divergence
     "kl_target": 0.01,
     # Whether to rollout "complete_episodes" or "truncate_episodes"
@@ -104,14 +106,40 @@ class PPOAgent(Agent):
             self.local_evaluator.for_policy(
                 lambda pi: pi.update_kl(fetches["kl"]))
         else:
+
+            def update(pi, pi_id):
+                if pi_id in fetches:
+                    pi.update_kl(fetches[pi_id]["kl"])
+                else:
+                    logger.debug(
+                        "No data for {}, not updating kl".format(pi_id))
+
             # multi-agent
-            self.local_evaluator.foreach_trainable_policy(
-                lambda pi, pi_id: pi.update_kl(fetches[pi_id]["kl"]))
+            self.local_evaluator.foreach_trainable_policy(update)
         res = self.optimizer.collect_metrics(
             self.config["collect_metrics_timeout"])
         res.update(
             timesteps_this_iter=self.optimizer.num_steps_sampled - prev_steps,
             info=dict(fetches, **res.get("info", {})))
+
+        # Warn about bad clipping configs
+        if self.config["vf_clip_param"] <= 0:
+            rew_scale = float("inf")
+        elif res["policy_reward_mean"]:
+            rew_scale = 0  # punt on handling multiagent case
+        else:
+            rew_scale = round(
+                abs(res["episode_reward_mean"]) / self.config["vf_clip_param"],
+                0)
+        if rew_scale > 100:
+            logger.warning(
+                "The magnitude of your environment rewards are more than "
+                "{}x the scale of `vf_clip_param`. ".format(rew_scale) +
+                "This means that it will take more than "
+                "{} iterations for your value ".format(rew_scale) +
+                "function to converge. If this is not intended, consider "
+                "increasing `vf_clip_param`.")
+
         return res
 
     def _validate_config(self):
@@ -123,7 +151,8 @@ class PPOAgent(Agent):
         if (self.config["batch_mode"] == "truncate_episodes"
                 and not self.config["use_gae"]):
             raise ValueError(
-                "Episode truncation is not supported without a value function")
+                "Episode truncation is not supported without a value "
+                "function. Consider setting batch_mode=complete_episodes.")
         if (self.config["multiagent"]["policy_graphs"]
                 and not self.config["simple_optimizer"]):
             logger.info(
@@ -131,7 +160,12 @@ class PPOAgent(Agent):
                 "by the multi-GPU optimizer. Consider setting "
                 "simple_optimizer=True if this doesn't work for you.")
         if self.config["observation_filter"] != "NoFilter":
-            # TODO(ekl): consider setting the default to be NoFilter
             logger.warning(
-                "By default, observations will be normalized with {}".format(
-                    self.config["observation_filter"]))
+                "By default, observations will be normalized with {}. ".format(
+                    self.config["observation_filter"]) +
+                "If you are using image or discrete type observations, "
+                "consider disabling this with observation_filter=NoFilter.")
+        if not self.config["vf_share_layers"]:
+            logger.warning(
+                "By default, the value function will NOT share layers with "
+                "the policy model (vf_share_layers=False).")

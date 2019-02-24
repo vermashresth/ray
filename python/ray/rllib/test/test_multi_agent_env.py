@@ -17,7 +17,7 @@ from ray.rllib.test.test_policy_evaluator import MockEnv, MockEnv2, \
 from ray.rllib.evaluation.policy_evaluator import PolicyEvaluator
 from ray.rllib.evaluation.policy_graph import PolicyGraph
 from ray.rllib.evaluation.metrics import collect_metrics
-from ray.rllib.env.async_vector_env import _MultiAgentEnvToAsync
+from ray.rllib.env.base_env import _MultiAgentEnvToBaseEnv
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from ray.tune.registry import register_env
 
@@ -36,8 +36,10 @@ class BasicMultiAgent(MultiAgentEnv):
         self.dones = set()
         self.observation_space = gym.spaces.Discrete(2)
         self.action_space = gym.spaces.Discrete(2)
+        self.resetted = False
 
     def reset(self):
+        self.resetted = True
         self.dones = set()
         return {i: a.reset() for i, a in enumerate(self.agents)}
 
@@ -48,6 +50,53 @@ class BasicMultiAgent(MultiAgentEnv):
             if done[i]:
                 self.dones.add(i)
         done["__all__"] = len(self.dones) == len(self.agents)
+        return obs, rew, done, info
+
+
+class EarlyDoneMultiAgent(MultiAgentEnv):
+    """Env for testing when the env terminates (after agent 0 does)."""
+
+    def __init__(self):
+        self.agents = [MockEnv(3), MockEnv(5)]
+        self.dones = set()
+        self.last_obs = {}
+        self.last_rew = {}
+        self.last_done = {}
+        self.last_info = {}
+        self.i = 0
+        self.observation_space = gym.spaces.Discrete(10)
+        self.action_space = gym.spaces.Discrete(2)
+
+    def reset(self):
+        self.dones = set()
+        self.last_obs = {}
+        self.last_rew = {}
+        self.last_done = {}
+        self.last_info = {}
+        self.i = 0
+        for i, a in enumerate(self.agents):
+            self.last_obs[i] = a.reset()
+            self.last_rew[i] = None
+            self.last_done[i] = False
+            self.last_info[i] = {}
+        obs_dict = {self.i: self.last_obs[self.i]}
+        self.i = (self.i + 1) % len(self.agents)
+        return obs_dict
+
+    def step(self, action_dict):
+        assert len(self.dones) != len(self.agents)
+        for i, action in action_dict.items():
+            (self.last_obs[i], self.last_rew[i], self.last_done[i],
+             self.last_info[i]) = self.agents[i].step(action)
+        obs = {self.i: self.last_obs[self.i]}
+        rew = {self.i: self.last_rew[self.i]}
+        done = {self.i: self.last_done[self.i]}
+        info = {self.i: self.last_info[self.i]}
+        if done[self.i]:
+            rew[self.i] = 0
+            self.dones.add(self.i)
+        self.i = (self.i + 1) % len(self.agents)
+        done["__all__"] = len(self.dones) == len(self.agents) - 1
         return obs, rew, done, info
 
 
@@ -173,8 +222,14 @@ class TestMultiAgentEnv(unittest.TestCase):
         obs, rew, done, info = env.step({0: 0})
         self.assertEqual(done["__all__"], True)
 
+    def testNoResetUntilPoll(self):
+        env = _MultiAgentEnvToBaseEnv(lambda v: BasicMultiAgent(2), [], 1)
+        self.assertFalse(env.get_unwrapped()[0].resetted)
+        env.poll()
+        self.assertTrue(env.get_unwrapped()[0].resetted)
+
     def testVectorizeBasic(self):
-        env = _MultiAgentEnvToAsync(lambda v: BasicMultiAgent(2), [], 2)
+        env = _MultiAgentEnvToBaseEnv(lambda v: BasicMultiAgent(2), [], 2)
         obs, rew, dones, _, _ = env.poll()
         self.assertEqual(obs, {0: {0: 0, 1: 0}, 1: {0: 0, 1: 0}})
         self.assertEqual(rew, {0: {0: None, 1: None}, 1: {0: None, 1: None}})
@@ -250,7 +305,7 @@ class TestMultiAgentEnv(unittest.TestCase):
             })
 
     def testVectorizeRoundRobin(self):
-        env = _MultiAgentEnvToAsync(lambda v: RoundRobinMultiAgent(2), [], 2)
+        env = _MultiAgentEnvToBaseEnv(lambda v: RoundRobinMultiAgent(2), [], 2)
         obs, rew, dones, _, _ = env.poll()
         self.assertEqual(obs, {0: {0: 0}, 1: {0: 0}})
         self.assertEqual(rew, {0: {0: None}, 1: {0: None}})
@@ -293,6 +348,22 @@ class TestMultiAgentEnv(unittest.TestCase):
             batch_steps=50)
         batch = ev.sample()
         self.assertEqual(batch.count, 50)
+
+    def testSampleFromEarlyDoneEnv(self):
+        act_space = gym.spaces.Discrete(2)
+        obs_space = gym.spaces.Discrete(2)
+        ev = PolicyEvaluator(
+            env_creator=lambda _: EarlyDoneMultiAgent(),
+            policy_graph={
+                "p0": (MockPolicyGraph, obs_space, act_space, {}),
+                "p1": (MockPolicyGraph, obs_space, act_space, {}),
+            },
+            policy_mapping_fn=lambda agent_id: "p{}".format(agent_id % 2),
+            batch_mode="complete_episodes",
+            batch_steps=1)
+        self.assertRaisesRegexp(ValueError,
+                                ".*don't have a last observation.*",
+                                lambda: ev.sample())
 
     def testMultiAgentSampleRoundRobin(self):
         act_space = gym.spaces.Discrete(2)
@@ -549,6 +620,6 @@ class TestMultiAgentEnv(unittest.TestCase):
         raise Exception("failed to improve reward")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     ray.init()
     unittest.main(verbosity=2)

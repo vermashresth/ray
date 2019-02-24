@@ -11,12 +11,15 @@ from functools import partial
 from ray.tune.registry import RLLIB_MODEL, RLLIB_PREPROCESSOR, \
     _global_registry
 
-from ray.rllib.models.action_dist import (
-    Categorical, Deterministic, DiagGaussian, MultiActionDistribution)
+from ray.rllib.models.extra_spaces import Simplex
+from ray.rllib.models.action_dist import (Categorical, Deterministic,
+                                          DiagGaussian,
+                                          MultiActionDistribution, Dirichlet)
 from ray.rllib.models.preprocessors import get_preprocessor
 from ray.rllib.models.fcnet import FullyConnectedNetwork
 from ray.rllib.models.visionnet import VisionNetwork
 from ray.rllib.models.lstm import LSTM
+from ray.rllib.utils.annotations import DeveloperAPI, PublicAPI
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +72,7 @@ MODEL_DEFAULTS = {
 # yapf: enable
 
 
+@PublicAPI
 class ModelCatalog(object):
     """Registry of models, preprocessors, and action distributions for envs.
 
@@ -84,6 +88,7 @@ class ModelCatalog(object):
     """
 
     @staticmethod
+    @DeveloperAPI
     def get_action_dist(action_space, config, dist_type=None):
         """Returns action distribution class and size for the given action space.
 
@@ -129,11 +134,13 @@ class ModelCatalog(object):
                 child_distributions=child_dist,
                 action_space=action_space,
                 input_lens=input_lens), sum(input_lens)
-
+        elif isinstance(action_space, Simplex):
+            return Dirichlet, action_space.shape[0]
         raise NotImplementedError("Unsupported args: {} {}".format(
             action_space, dist_type))
 
     @staticmethod
+    @DeveloperAPI
     def get_action_placeholder(action_space):
         """Returns an action placeholder that is consistent with the action space
 
@@ -161,11 +168,15 @@ class ModelCatalog(object):
                 tf.int64 if all_discrete else tf.float32,
                 shape=(None, size),
                 name="action")
+        elif isinstance(action_space, Simplex):
+            return tf.placeholder(
+                tf.float32, shape=(None, action_space.shape[0]), name="action")
         else:
             raise NotImplementedError("action space {}"
                                       " not supported".format(action_space))
 
     @staticmethod
+    @DeveloperAPI
     def get_model(input_dict,
                   obs_space,
                   num_outputs,
@@ -230,6 +241,7 @@ class ModelCatalog(object):
                                      options)
 
     @staticmethod
+    @DeveloperAPI
     def get_torch_model(obs_space,
                         num_outputs,
                         options=None,
@@ -276,6 +288,7 @@ class ModelCatalog(object):
         return PyTorchFCNet(obs_space, num_outputs, options)
 
     @staticmethod
+    @DeveloperAPI
     def get_preprocessor(env, options=None):
         """Returns a suitable preprocessor for the given env.
 
@@ -286,6 +299,7 @@ class ModelCatalog(object):
                                                        options)
 
     @staticmethod
+    @DeveloperAPI
     def get_preprocessor_for_space(observation_space, options=None):
         """Returns a suitable preprocessor for the given observation space.
 
@@ -317,6 +331,7 @@ class ModelCatalog(object):
         return prep
 
     @staticmethod
+    @PublicAPI
     def register_custom_preprocessor(preprocessor_name, preprocessor_class):
         """Register a custom preprocessor class by name.
 
@@ -331,6 +346,7 @@ class ModelCatalog(object):
                                   preprocessor_class)
 
     @staticmethod
+    @PublicAPI
     def register_custom_model(model_name, model_class):
         """Register a custom model class by name.
 

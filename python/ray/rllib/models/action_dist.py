@@ -7,12 +7,13 @@ import distutils.version
 import tensorflow as tf
 import numpy as np
 
-from ray.rllib.utils.annotations import override
+from ray.rllib.utils.annotations import override, DeveloperAPI
 
 use_tf150_api = (distutils.version.LooseVersion(tf.VERSION) >=
                  distutils.version.LooseVersion("1.5.0"))
 
 
+@DeveloperAPI
 class ActionDistribution(object):
     """The policy action distribution of an agent.
 
@@ -20,24 +21,44 @@ class ActionDistribution(object):
       inputs (Tensor): The input vector to compute samples from.
     """
 
+    @DeveloperAPI
     def __init__(self, inputs):
         self.inputs = inputs
+        self.sample_op = self._build_sample_op()
 
+    @DeveloperAPI
     def logp(self, x):
         """The log-likelihood of the action distribution."""
         raise NotImplementedError
 
+    @DeveloperAPI
     def kl(self, other):
         """The KL-divergence between two action distributions."""
         raise NotImplementedError
 
+    @DeveloperAPI
     def entropy(self):
-        """The entroy of the action distribution."""
+        """The entropy of the action distribution."""
         raise NotImplementedError
 
+    @DeveloperAPI
+    def _build_sample_op(self):
+        """Implement this instead of sample(), to enable op reuse.
+
+        This is needed since the sample op is non-deterministic and is shared
+        between sample() and sampled_action_prob().
+        """
+        raise NotImplementedError
+
+    @DeveloperAPI
     def sample(self):
         """Draw a sample from the action distribution."""
-        raise NotImplementedError
+        return self.sample_op
+
+    @DeveloperAPI
+    def sampled_action_prob(self):
+        """Returns the log probability of the sampled action."""
+        return tf.exp(self.logp(self.sample_op))
 
 
 class Categorical(ActionDistribution):
@@ -89,7 +110,7 @@ class Categorical(ActionDistribution):
             p0 * (a0 - tf.log(z0) - a1 + tf.log(z1)), reduction_indices=[1])
 
     @override(ActionDistribution)
-    def sample(self):
+    def _build_sample_op(self):
         return tf.squeeze(tf.multinomial(self.inputs, 1), axis=1)
 
 
@@ -101,11 +122,11 @@ class DiagGaussian(ActionDistribution):
     """
 
     def __init__(self, inputs):
-        ActionDistribution.__init__(self, inputs)
         mean, log_std = tf.split(inputs, 2, axis=1)
         self.mean = mean
         self.log_std = log_std
         self.std = tf.exp(log_std)
+        ActionDistribution.__init__(self, inputs)
 
     @override(ActionDistribution)
     def logp(self, x):
@@ -130,7 +151,7 @@ class DiagGaussian(ActionDistribution):
             reduction_indices=[1])
 
     @override(ActionDistribution)
-    def sample(self):
+    def _build_sample_op(self):
         return self.mean + self.std * tf.random_normal(tf.shape(self.mean))
 
 
@@ -141,7 +162,11 @@ class Deterministic(ActionDistribution):
     """
 
     @override(ActionDistribution)
-    def sample(self):
+    def sampled_action_prob(self):
+        return 1.0
+
+    @override(ActionDistribution)
+    def _build_sample_op(self):
         return self.inputs
 
 
@@ -199,5 +224,39 @@ class MultiActionDistribution(ActionDistribution):
     def sample(self):
         return TupleActions([s.sample() for s in self.child_distributions])
 
+    @override(ActionDistribution)
+    def sampled_action_prob(self):
+        p = self.child_distributions[0].sampled_action_prob()
+        for c in self.child_distributions[1:]:
+            p *= c.sampled_action_prob()
+        return p
+
 
 TupleActions = namedtuple("TupleActions", ["batches"])
+
+
+class Dirichlet(ActionDistribution):
+    """Dirichlet distribution for countinuous actions that are between
+    [0,1] and sum to 1.
+
+    e.g. actions that represent resource allocation."""
+
+    def __init__(self, inputs):
+        self.dist = tf.distributions.Dirichlet(concentration=inputs)
+        ActionDistribution.__init__(self, inputs)
+
+    @override(ActionDistribution)
+    def logp(self, x):
+        return self.dist.log_prob(x)
+
+    @override(ActionDistribution)
+    def entropy(self):
+        return self.dist.entropy()
+
+    @override(ActionDistribution)
+    def kl(self, other):
+        return self.dist.kl_divergence(other.dist)
+
+    @override(ActionDistribution)
+    def _build_sample_op(self):
+        return self.dist.sample()

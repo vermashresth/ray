@@ -1,25 +1,26 @@
 package org.ray.api.test;
 
-import java.io.File;
-import org.junit.After;
-import org.junit.Before;
 import org.ray.api.Ray;
+import org.testng.annotations.AfterMethod;
+import org.testng.annotations.BeforeMethod;
 
 public class BaseTest {
 
-  @Before
+  @BeforeMethod
   public void setUp() {
     System.setProperty("ray.home", "../..");
     System.setProperty("ray.resources", "CPU:4,RES-A:4");
+    beforeInitRay();
     Ray.init();
   }
 
-  @After
+  @AfterMethod
   public void tearDown() {
     // TODO(qwang): This is double check to check that the socket file is removed actually.
     // We could not enable this until `systemInfo` enabled.
     //File rayletSocketFIle = new File(Ray.systemInfo().rayletSocketName());
     Ray.shutdown();
+    afterShutdownRay();
 
     //remove raylet socket file
     //rayletSocketFIle.delete();
@@ -29,4 +30,11 @@ public class BaseTest {
     System.clearProperty("ray.resources");
   }
 
+  protected void beforeInitRay() {
+
+  }
+
+  protected void afterShutdownRay() {
+
+  }
 }
