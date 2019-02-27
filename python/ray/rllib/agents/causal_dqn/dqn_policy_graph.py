@@ -280,6 +280,7 @@ class QLoss(object):
 
 class DQNPolicyGraph(TFPolicyGraph):
     def __init__(self, observation_space, action_space, config):
+        #TODO(natashajaques): Should import causal_dqn.dqn
         config = dict(ray.rllib.agents.dqn.dqn.DEFAULT_CONFIG, **config)
         if not isinstance(action_space, Discrete):
             raise UnsupportedSpaceException(
@@ -518,6 +519,20 @@ class DQNPolicyGraph(TFPolicyGraph):
         fetches = builder.add_fetches([self._sampler] + self._state_outputs +
                                       [self.extra_compute_action_fetches()])
         return fetches[0], fetches[1:-1], fetches[-1]
+
+    @override(TFPolicyGraph)
+    def _build_compute_apply(self, builder, postprocessed_batch):
+        import pdb; pdb.set_trace()
+        builder.add_feed_dict(self.extra_compute_grad_feed_dict())
+        builder.add_feed_dict(self.extra_apply_grad_feed_dict())
+        builder.add_feed_dict(self._get_loss_inputs_dict(postprocessed_batch))
+        builder.add_feed_dict({self._is_training: True})
+        fetches = builder.add_fetches([
+            self._apply_op,
+            self.extra_compute_grad_fetches(),
+            self.extra_apply_grad_fetches()
+        ])
+        return fetches[1], fetches[2]
 
     @override(PolicyGraph)
     def get_state(self):

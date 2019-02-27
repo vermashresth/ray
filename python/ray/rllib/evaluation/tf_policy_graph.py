@@ -419,6 +419,7 @@ class TFPolicyGraph(PolicyGraph):
         state_keys = [
             "state_in_{}".format(i) for i in range(len(self._state_inputs))
         ]
+        import pdb; pdb.set_trace()
         feature_sequences, initial_states, seq_lens = chop_into_sequences(
             batch["eps_id"],
             batch["agent_index"], [batch[k] for k in feature_keys],
