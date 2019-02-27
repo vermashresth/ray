@@ -224,7 +224,6 @@ def _env_runner(base_env,
         rollout (SampleBatch): Object containing state, action, reward,
             terminal condition, and other fields as dictated by `policy`.
     """
-
     try:
         if not horizon:
             horizon = (base_env.get_unwrapped()[0].spec.max_episode_steps)
@@ -450,11 +449,14 @@ def _do_policy_eval(tf_sess, to_eval, policies, active_episodes):
         if builder and (policy.compute_actions.__code__ is
                         TFPolicyGraph.compute_actions.__code__):
             # TODO(ekl): how can we make info batch available to TF code?
+            
             pending_fetches[policy_id] = policy._build_compute_actions(
                 builder, [t.obs for t in eval_data],
                 rnn_in_cols,
                 prev_action_batch=[t.prev_action for t in eval_data],
-                prev_reward_batch=[t.prev_reward for t in eval_data])
+                prev_reward_batch=[t.prev_reward for t in eval_data],
+                episodes=to_eval)
+            # Sending to_eval as episodes to make other agents actions visible
         else:
             eval_results[policy_id] = policy.compute_actions(
                 [t.obs for t in eval_data],
