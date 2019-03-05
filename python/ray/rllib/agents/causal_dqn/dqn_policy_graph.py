@@ -575,7 +575,6 @@ class DQNPolicyGraph(TFPolicyGraph):
 
     def compute_td_error(self, obs_t, other_actions_t, act_t, rew_t, obs_tp1,
                          other_actions_tp1, done_mask, importance_weights):
-        import pdb; pdb.set_trace()
         td_err = self.sess.run(
             self.loss.td_error,
             feed_dict={
