@@ -6,6 +6,7 @@ from gym.spaces import Discrete
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.layers as layers
+from collections import namedtuple
 
 import ray
 from ray.rllib.models import ModelCatalog
@@ -17,6 +18,8 @@ from ray.rllib.evaluation.tf_policy_graph import TFPolicyGraph
 
 Q_SCOPE = "q_func"
 Q_TARGET_SCOPE = "target_q_func"
+
+ActionObs = namedtuple('ActionObs', 'obs action')
 
 
 class QNetwork(object):
@@ -301,7 +304,8 @@ class DQNPolicyGraph(TFPolicyGraph):
 
         # Int encoding of other agents' actions. Needs to be one-hotted later.
         self.cur_other_actions = tf.placeholder(
-            tf.int32, shape=(None, self.num_other_agents))
+            tf.int32, shape=(None, self.num_other_agents), 
+            name="cur_other_actions")
 
         # Action Q network
         with tf.variable_scope(Q_SCOPE) as scope:
@@ -317,13 +321,15 @@ class DQNPolicyGraph(TFPolicyGraph):
         self.obs_t = tf.placeholder(
             tf.float32, shape=(None, ) + observation_space.shape)
         self.other_actions_t = tf.placeholder(
-            tf.int32, shape=(None, self.num_other_agents, self.num_actions))
+            tf.int32, shape=(None, self.num_other_agents),
+            name="other_actions_t")
         self.act_t = tf.placeholder(tf.int32, [None], name="action")
         self.rew_t = tf.placeholder(tf.float32, [None], name="reward")
         self.obs_tp1 = tf.placeholder(
             tf.float32, shape=(None, ) + observation_space.shape)
         self.other_actions_tp1 = tf.placeholder(
-            tf.int32, shape=(None, self.num_other_agents, self.num_actions))
+            tf.int32, shape=(None, self.num_other_agents),
+            name="other_actions_tp1")
         self.done_mask = tf.placeholder(tf.float32, [None], name="done")
         self.importance_weights = tf.placeholder(
             tf.float32, [None], name="weight")
@@ -468,7 +474,8 @@ class DQNPolicyGraph(TFPolicyGraph):
                 where the second tuple element is the relevant dict containing
                 previous actions.
 
-        Returns: a real valued array of size [batch, num_other_agents]
+        Returns: a real valued array of size [batch, num_other_agents] (meaning
+            each agents' actions goes down one column, each row is a timestep)
         """
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
@@ -520,12 +527,35 @@ class DQNPolicyGraph(TFPolicyGraph):
                                       [self.extra_compute_action_fetches()])
         return fetches[0], fetches[1:-1], fetches[-1]
 
+    def create_action_batch(self, batch):
+        """Observations store both RGB obs with other agents' past actions (to
+        be compatible with replay buffer) so batch['obs'] is a 
+        [batch_size, 2, ...] numpy array where batch['obs'][x][0] is the obs and 
+        batch['obs'][x][1] is the other agents' actions.
+
+        Need to pull these out and make a new actions stored in separate keys, 
+        to make self.loss_inputs dict
+        """
+        obs = [ao[0] for ao in batch['obs']]
+        other_actions = [ao[1] for ao in batch['obs']]
+        new_obs = [ao[0] for ao in batch['new_obs']]
+        new_other_actions = [ao[1] for ao in batch['new_obs']]
+
+        # Need to reshape others actions to conform to 
+
+        batch['other_actions'] = other_actions
+        batch['new_other_actions'] = new_other_actions
+        batch['obs'] = obs
+        batch['new_obs'] = new_obs
+
+        return batch
+    
     @override(TFPolicyGraph)
     def _build_compute_apply(self, builder, postprocessed_batch):
-        import pdb; pdb.set_trace()
+        reprocessed_batch = self.create_action_batch(postprocessed_batch)
         builder.add_feed_dict(self.extra_compute_grad_feed_dict())
         builder.add_feed_dict(self.extra_apply_grad_feed_dict())
-        builder.add_feed_dict(self._get_loss_inputs_dict(postprocessed_batch))
+        builder.add_feed_dict(self._get_loss_inputs_dict(reprocessed_batch))
         builder.add_feed_dict({self._is_training: True})
         fetches = builder.add_fetches([
             self._apply_op,
@@ -623,9 +653,16 @@ def get_prev_others_actions(all_actions, num_other_agents):
 
 
 def _postprocess_dqn(policy_graph, sample_batch, others_actions):
-    obs, actions, rewards, new_obs, dones = [
+    """
+    Args:
+        policy_graph: A DQNPolicyGraph instance
+        sample_batch: A SampleBatch
+        others_actions: a real valued array of size [batch, num_other_agents] 
+            (meaning each agents' actions is a column, each row is a timestep)
+    """
+    obs, actions, rewards, new_obs, dones, infos = [
         list(x) for x in sample_batch.columns(
-            ["obs", "actions", "rewards", "new_obs", "dones"])
+            ["obs", "actions", "rewards", "new_obs", "dones", "infos"])
     ]
 
     # Get other agents actions
@@ -638,23 +675,26 @@ def _postprocess_dqn(policy_graph, sample_batch, others_actions):
                       policy_graph.config["gamma"], rewards,
                       new_obs, others_actions, dones)
 
-    # need other_actions and new_other_actions as keys
+    # Make combined action/observation tuples so replay buffer can handle
+    # storing them.
+    act_obs = [ActionObs(obs[i], old_actions[i, :]) for i in range(len(obs))]
+    new_act_obs = [ActionObs(new_obs[i], others_actions[i, :]) 
+                 for i in range(len(new_obs))]
+    
     batch = SampleBatch({
-        "obs": obs,
-        "other_actions": old_actions,
+        "obs": act_obs,
         "actions": actions,
         "rewards": rewards,
-        "new_obs": new_obs,
-        "new_other_actions": others_actions,
+        "new_obs": new_act_obs,
         "dones": dones,
-        "weights": np.ones_like(rewards)
+        "weights": np.ones_like(rewards),
     })
 
     # Prioritize on the worker side
     if batch.count > 0 and policy_graph.config["worker_side_prioritization"]:
         td_errors = policy_graph.compute_td_error(
-            batch["obs"], batch["other_actions"], batch["actions"],
-            batch["rewards"], batch["new_obs"], batch["new_other_actions"],
+            batch["obs"], old_actions, batch["actions"],
+            batch["rewards"], batch["new_obs"], others_actions,
             batch["dones"], batch["weights"])
         new_priorities = (
             np.abs(td_errors) + policy_graph.config["prioritized_replay_eps"])
