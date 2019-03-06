@@ -8,8 +8,9 @@ import tensorflow as tf
 import tensorflow.contrib.layers as layers
 
 import ray
-from ray.rllib.agents.dqn.dqn_policy_graph import _huber_loss, \
-    _minimize_and_clip, _scope_vars, _postprocess_dqn
+import ray.experimental.tf_utils
+from ray.rllib.agents.dqn.dqn_policy_graph import (
+    _huber_loss, _minimize_and_clip, _scope_vars, _postprocess_dqn)
 from ray.rllib.models import ModelCatalog
 from ray.rllib.utils.annotations import override
 from ray.rllib.utils.error import UnsupportedSpaceException
@@ -312,12 +313,6 @@ class DDPGPolicyGraph(TFPolicyGraph):
                         self.loss.critic_loss += (
                             config["l2_reg"] * 0.5 * tf.nn.l2_loss(var))
 
-        # Model self-supervised losses
-        self.loss.actor_loss += self.p_model.loss()
-        self.loss.critic_loss += self.q_model.loss()
-        if self.config["twin_q"]:
-            self.loss.critic_loss += self.twin_q_model.loss()
-
         # update_target_fn will be called periodically to copy Q network to
         # target Q network
         self.tau_value = config.get("tau")
@@ -353,6 +348,17 @@ class DDPGPolicyGraph(TFPolicyGraph):
             ("dones", self.done_mask),
             ("weights", self.importance_weights),
         ]
+        input_dict = dict(self.loss_inputs)
+
+        # Model self-supervised losses
+        self.loss.actor_loss = self.p_model.custom_loss(
+            self.loss.actor_loss, input_dict)
+        self.loss.critic_loss = self.q_model.custom_loss(
+            self.loss.critic_loss, input_dict)
+        if self.config["twin_q"]:
+            self.loss.critic_loss = self.twin_q_model.custom_loss(
+                self.loss.critic_loss, input_dict)
+
         TFPolicyGraph.__init__(
             self,
             observation_space,
@@ -367,7 +373,7 @@ class DDPGPolicyGraph(TFPolicyGraph):
 
         # Note that this encompasses both the policy and Q-value networks and
         # their corresponding target networks
-        self.variables = ray.experimental.TensorFlowVariables(
+        self.variables = ray.experimental.tf_utils.TensorFlowVariables(
             tf.group(q_tp0, q_tp1), self.sess)
 
         # Hard initial update

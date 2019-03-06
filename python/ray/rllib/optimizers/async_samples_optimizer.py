@@ -79,7 +79,8 @@ class AsyncSamplesOptimizer(PolicyOptimizer):
                                          minibatch_buffer_size, num_sgd_iter)
         self.learner.start()
 
-        assert len(self.remote_evaluators) > 0
+        if len(self.remote_evaluators) == 0:
+            logger.warning("Config num_workers=0 means training will hang!")
 
         # Stats
         self.timers = {k: TimerStat() for k in ["train", "sample"]}
