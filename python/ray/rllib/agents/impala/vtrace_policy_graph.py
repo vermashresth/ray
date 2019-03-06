@@ -334,7 +334,9 @@ class VTracePolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
     @override(TFPolicyGraph)
     def extra_compute_action_fetches(self):
-        return {"behaviour_logits": self.model.outputs}
+        return dict(
+            TFPolicyGraph.extra_compute_action_fetches(self),
+            **{"behaviour_logits": self.model.outputs})
 
     @override(TFPolicyGraph)
     def extra_compute_grad_fetches(self):

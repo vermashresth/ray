@@ -435,7 +435,7 @@ class AsyncPPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         out = {"behaviour_logits": self.model.outputs}
         if not self.config["vtrace"]:
             out["vf_preds"] = self.value_function
-        return out
+        return dict(TFPolicyGraph.extra_compute_action_fetches(self), **out)
 
     def extra_compute_grad_fetches(self):
         return self.stats_fetches

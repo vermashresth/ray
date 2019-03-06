@@ -155,7 +155,9 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
     @override(TFPolicyGraph)
     def extra_compute_action_fetches(self):
-        return {"vf_preds": self.vf}
+        return dict(
+            TFPolicyGraph.extra_compute_action_fetches(self),
+            **{"vf_preds": self.vf})
 
     def _value(self, ob, *args):
         feed_dict = {self.observations: [ob], self.model.seq_lens: [1]}

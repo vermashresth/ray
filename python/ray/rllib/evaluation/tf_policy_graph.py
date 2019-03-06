@@ -111,6 +111,7 @@ class TFPolicyGraph(PolicyGraph):
         self._loss_inputs = loss_inputs
         self._loss_input_dict = dict(self._loss_inputs)
         self._is_training = self._get_is_training_placeholder()
+        self._action_prob = action_prob
         self._state_inputs = state_inputs or []
         self._state_outputs = state_outputs or []
         for i, ph in enumerate(self._state_inputs):
@@ -193,9 +194,9 @@ class TFPolicyGraph(PolicyGraph):
         return builder.get(fetches)
 
     @override(PolicyGraph)
-    def compute_apply(self, postprocessed_batch):
-        builder = TFRunBuilder(self._sess, "compute_apply")
-        fetches = self._build_compute_apply(builder, postprocessed_batch)
+    def learn_on_batch(self, postprocessed_batch):
+        builder = TFRunBuilder(self._sess, "learn_on_batch")
+        fetches = self._build_learn_on_batch(builder, postprocessed_batch)
         return builder.get(fetches)
 
     @override(PolicyGraph)
@@ -245,8 +246,14 @@ class TFPolicyGraph(PolicyGraph):
 
     @DeveloperAPI
     def extra_compute_action_fetches(self):
-        """Extra values to fetch and return from compute_actions()."""
-        return {}  # e.g, value function
+        """Extra values to fetch and return from compute_actions().
+
+        By default we only return action probability info (if present).
+        """
+        if self._action_prob is not None:
+            return {"action_prob": self._action_prob}
+        else:
+            return {}
 
     @DeveloperAPI
     def extra_compute_grad_feed_dict(self):
@@ -394,7 +401,7 @@ class TFPolicyGraph(PolicyGraph):
             [self._apply_op, self.extra_apply_grad_fetches()])
         return fetches[1]
 
-    def _build_compute_apply(self, builder, postprocessed_batch):
+    def _build_learn_on_batch(self, builder, postprocessed_batch):
         builder.add_feed_dict(self.extra_compute_grad_feed_dict())
         builder.add_feed_dict(self.extra_apply_grad_feed_dict())
         builder.add_feed_dict(self._get_loss_inputs_dict(postprocessed_batch))
