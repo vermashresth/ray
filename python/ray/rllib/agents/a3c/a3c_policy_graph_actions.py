@@ -180,6 +180,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             each agents' actions goes down one column, each row is a timestep)
         """
         if episodes is None:
+            print("Why are there no episodes?")
             import pdb; pdb.set_trace()
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
