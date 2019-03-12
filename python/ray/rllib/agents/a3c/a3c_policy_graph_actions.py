@@ -179,6 +179,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         Returns: a real valued array of size [batch, num_other_agents] (meaning
             each agents' actions goes down one column, each row is a timestep)
         """
+        if episodes is None:
+            import pdb; pdb.set_trace()
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
         agent_ids = sorted(episodes.keys())

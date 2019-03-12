@@ -469,6 +469,7 @@ def _do_policy_eval(tf_sess, to_eval, policies, active_episodes):
         if builder and (policy.compute_actions.__code__ is
                         TFPolicyGraph.compute_actions.__code__):
             # TODO(ekl): how can we make info batch available to TF code?
+            import pdb; pdb.set_trace()
             pending_fetches[policy_id] = policy._build_compute_actions(
                 builder, [t.obs for t in eval_data],
                 rnn_in_cols,
@@ -477,7 +478,6 @@ def _do_policy_eval(tf_sess, to_eval, policies, active_episodes):
                 episodes=to_eval) 
             # Sending to_eval as episodes to make other agents actions visible
         else:
-            import pdb; pdb.set_trace()
             eval_results[policy_id] = policy.compute_actions(
                 [t.obs for t in eval_data],
                 rnn_in_cols,
