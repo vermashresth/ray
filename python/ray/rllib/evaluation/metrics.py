@@ -36,7 +36,7 @@ def collect_episodes(local_evaluator,
         a.apply.remote(lambda ev: ev.get_metrics()) for a in remote_evaluators
     ]
     collected, _ = ray.wait(
-        pending, num_returns=len(pending), timeout=timeout_seconds * 1.0)
+        pending, num_returns=len(pending), timeout=timeout_seconds)
     num_metric_batches_dropped = len(pending) - len(collected)
 
     metric_lists = ray.get(collected)
