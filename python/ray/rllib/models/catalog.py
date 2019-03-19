@@ -366,3 +366,78 @@ class ModelCatalog(object):
             model_class (type): Python class of the model.
         """
         _global_registry.register(RLLIB_MODEL, model_name, model_class)
+
+    @staticmethod
+    @DeveloperAPI
+    def get_double_lstm_model(input_dict,
+                  obs_space,
+                  num_outputs_lstm1,
+                  num_outputs_lstm2,
+                  options,
+                  state_in1=None,
+                  seq_lens1=None,
+                  state_in2=None,
+                  seq_lens2=None,
+                  lstm1_name='lstm1',
+                  lstm2_name='lstm2'):
+        """Returns a 2 LSTM model conforming to given input and output specs.
+
+        Both LSTMs are connected to the same shared feature extraction model.
+
+        Args:
+            input_dict (dict): Dict of input tensors to the model, including
+                the observation under the "obs" key.
+            obs_space (Space): Observation space of the target gym env.
+            num_outputs_lstm1 (int): The size of the output of the first LSTM.
+            num_outputs_lstm2 (int): The size of the output of the second LSTM.
+            options (dict): Optional args to pass to the model constructor.
+            state_in1 (list): Optional LSTM1 state in tensors.
+            seq_in1 (Tensor): Optional LSTM1 sequence length tensor.
+            state_in2 (list): Optional LSTM2 state in tensors.
+            seq_in2 (Tensor): Optional LSTM2 sequence length tensor.
+            lstm1_name: A string variable scope name for first LSTM.
+            lstm1_name: A string variable scope name for second LSTM.
+
+        Returns:
+            model (models.Model): Neural network model.
+        """
+
+        assert isinstance(input_dict, dict)
+        options = options or MODEL_DEFAULTS
+        # Gets the feature extraction layers before LSTM layers
+        model = ModelCatalog._get_model(input_dict, obs_space, 
+                                        num_outputs_lstm1, options, state_in1, 
+                                        seq_lens1)
+
+        # Create LSTM 1
+        with tf.variable_scope(lstm1_name):
+            copy = dict(input_dict)
+            copy["obs"] = model.last_layer
+            feature_space = gym.spaces.Box(
+                -1, 1, shape=(model.last_layer.shape[1], ))
+            lstm1 = LSTM(copy, feature_space, num_outputs_lstm1, options, state_in1,
+                        seq_lens2)
+
+            logger.debug("Created model {}: ({} of {}, {}, {}) -> {}, {}".format(
+                lstm1, input_dict, obs_space, state_in1, seq_lens1, lstm1.outputs,
+                lstm1.state_out))
+
+            lstm1._validate_output_shape()
+        import pdb; pdb.set_trace()
+
+        # Create LSTM 2
+        with tf.variable_scope(lstm2_name):
+            copy = dict(input_dict)
+            copy["obs"] = model.last_layer
+            feature_space = gym.spaces.Box(
+                -1, 1, shape=(model.last_layer.shape[1], ))
+            lstm2 = LSTM(copy, feature_space, num_outputs_lstm2, options, state_in2,
+                        seq_lens2)
+
+            logger.debug("Created model {}: ({} of {}, {}, {}) -> {}, {}".format(
+                lstm2, input_dict, obs_space, state_in1, seq_lens2, lstm2.outputs,
+                lstm2.state_out))
+
+            lstm2._validate_output_shape()
+        import pdb; pdb.set_trace()
+        return lstm1, lstm2

@@ -39,6 +39,10 @@ class A3CLoss(object):
         self.total_loss = (self.pi_loss + self.vf_loss * vf_loss_coeff +
                            self.entropy * entropy_coeff)
 
+class MOALoss(object):
+    def __init__(self):
+        pass
+
 
 class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
     def __init__(self, observation_space, action_space, config):
@@ -54,25 +58,43 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.observations = tf.placeholder(
             tf.float32, [None] + list(observation_space.shape))
 
-        # Add other agents actions placeholder
+        # Add other agents actions placeholder for conditioning possible
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents), name="others_actions")
+        
+        # Add others next actions for training model of other agents
+        self.others_next_actions = tf.placeholder(tf.int32,
+            shape=(None, self.num_other_agents), name="others_next_actions")
 
         dist_class, logit_dim = ModelCatalog.get_action_dist(
             action_space, self.config["model"])
         prev_actions = ModelCatalog.get_action_placeholder(action_space)
         prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
-        self.model = ModelCatalog.get_model({
-            "obs": self.observations,
-            "others_actions": self.others_actions,
-            "prev_actions": prev_actions,
-            "prev_rewards": prev_rewards,
-            "is_training": self._get_is_training_placeholder(),
-        }, observation_space, logit_dim, self.config["model"])
-        action_dist = dist_class(self.model.outputs)
-        self.vf = self.model.value_function()
+
+        # Compute output size of model of other agents (MOA)
+        moa_dim = logit_dim * self.num_other_agents
+        
+        # We now create two models, one for the policy, and one for the model
+        # of other agents (MOA)
+        self.rl_model, self.moa = ModelCatalog.get_double_lstm_model({
+                "obs": self.observations,
+                "others_actions": self.others_actions,
+                "prev_actions": prev_actions,
+                "prev_rewards": prev_rewards,
+                "is_training": self._get_is_training_placeholder(),
+            }, observation_space, logit_dim, moa_dim, self.config["model"], 
+            lstm1_name="policy", lstm2_name="moa")
+        
+
+        action_dist = dist_class(self.rl_model.outputs)
+        self.vf = self.rl_model.value_function()
         self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                           tf.get_variable_scope().name)
+
+        import pdb; pdb.set_trace()
+        # Setup the MOA loss
+        self.moa_preds = self.moa.outputs
+        #TODO: may want to reshape and softmax
 
         # Setup the policy loss
         if isinstance(action_space, gym.spaces.Box):
@@ -86,7 +108,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                     action_space))
         advantages = tf.placeholder(tf.float32, [None], name="advantages")
         self.v_target = tf.placeholder(tf.float32, [None], name="v_target")
-        self.loss = A3CLoss(action_dist, actions, advantages, self.v_target,
+        self.rl_loss = A3CLoss(action_dist, actions, advantages, self.v_target,
                             self.vf, self.config["vf_loss_coeff"],
                             self.config["entropy_coeff"])
 
@@ -111,13 +133,13 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             action_sampler=action_dist.sample(),
             action_prob=action_dist.sampled_action_prob(),
             loss=self.loss.total_loss,
-            model=self.model,
+            model=self.rl_model,
             loss_inputs=loss_in,
-            state_inputs=self.model.state_in,
-            state_outputs=self.model.state_out,
+            state_inputs=self.rl_model.state_in,
+            state_outputs=self.rl_model.state_out,
             prev_action_input=prev_actions,
             prev_reward_input=prev_rewards,
-            seq_lens=self.model.seq_lens,
+            seq_lens=self.rl_model.seq_lens,
             max_seq_len=self.config["model"]["max_seq_len"])
 
         self.stats_fetches = {
@@ -261,12 +283,12 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
     def _value(self, ob, others_actions, prev_action, prev_reward, *args):
         feed_dict = {self.observations: [ob], 
                      self.others_actions: [others_actions], 
-                     self.model.seq_lens: [1],
+                     self.rl_model.seq_lens: [1],
                      self._prev_action_input: [prev_action],
                      self._prev_reward_input: [prev_reward]}
-        assert len(args) == len(self.model.state_in), \
-            (args, self.model.state_in)
-        for k, v in zip(self.model.state_in, args):
+        assert len(args) == len(self.rl_model.state_in), \
+            (args, self.rl_model.state_in)
+        for k, v in zip(self.rl_model.state_in, args):
             feed_dict[k] = v
         vf = self.sess.run(self.vf, feed_dict)
         return vf[0]
