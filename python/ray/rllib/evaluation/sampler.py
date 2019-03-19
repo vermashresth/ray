@@ -280,6 +280,7 @@ def _env_runner(base_env,
             base_env, policies, batch_builder_pool, active_episodes,
             unfiltered_obs, rewards, dones, infos, off_policy_actions, horizon,
             preprocessors, obs_filters, unroll_length, pack, callbacks)
+        import pdb; pdb.set_trace()
         for o in outputs:
             yield o
 
@@ -346,6 +347,7 @@ def _process_observations(base_env, policies, batch_builder_pool,
                     outputs.append(
                         m._replace(custom_metrics=episode.custom_metrics))
             else:
+                import pdb; pdb.set_trace()
                 outputs.append(
                     RolloutMetrics(episode.length, episode.total_reward,
                                    dict(episode.agent_rewards),
@@ -487,6 +489,7 @@ def _do_policy_eval(tf_sess, to_eval, policies, active_episodes):
     if builder:
         for k, v in pending_fetches.items():
             eval_results[k] = builder.get(v)
+    import pdb; pdb.set_trace()
 
     return eval_results
 
@@ -534,6 +537,7 @@ def _process_policy_eval_results(to_eval, eval_results, active_episodes,
             episode._set_last_pi_info(
                 agent_id, {k: v[i]
                            for k, v in pi_info_cols.items()})
+            import pdb; pdb.set_trace()
             if env_id in off_policy_actions and \
                     agent_id in off_policy_actions[env_id]:
                 episode._set_last_action(agent_id,

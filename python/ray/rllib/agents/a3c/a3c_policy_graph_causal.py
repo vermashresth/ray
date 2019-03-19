@@ -171,17 +171,15 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             seq_lens=self.rl_model.seq_lens,
             max_seq_len=self.config["model"]["max_seq_len"])
 
-        self._stats_fetches = {
-            "stats": {
-                "cur_lr": tf.cast(self.cur_lr, tf.float64),
-                "policy_loss": self.rl_loss.pi_loss,
-                "policy_entropy": self.rl_loss.entropy,
-                "grad_gnorm": tf.global_norm(self._grads),
-                "var_gnorm": tf.global_norm(self.var_list),
-                "vf_loss": self.rl_loss.vf_loss,
-                "vf_explained_var": explained_variance(self.v_target, self.vf),
-                "moa_loss": self.moa_loss.total_loss
-            },
+        self.stats = {
+            "cur_lr": tf.cast(self.cur_lr, tf.float64),
+            "policy_loss": self.rl_loss.pi_loss,
+            "policy_entropy": self.rl_loss.entropy,
+            "grad_gnorm": tf.global_norm(self._grads),
+            "var_gnorm": tf.global_norm(self.var_list),
+            "vf_loss": self.rl_loss.vf_loss,
+            "vf_explained_var": explained_variance(self.v_target, self.vf),
+            "moa_loss": self.moa_loss.total_loss
         }
 
         self.sess.run(tf.global_variables_initializer())
@@ -293,6 +291,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         builder.add_feed_dict(dict(zip(self._state_inputs, state_batches)))
         fetches = builder.add_fetches([self._sampler] + self._state_outputs +
                                       [self.extra_compute_action_fetches()])
+        import pdb; pdb.set_trace()
         return fetches[0], fetches[1:-1], fetches[-1]
 
     def _get_loss_inputs_dict(self, batch):
@@ -310,7 +309,9 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
     @override(TFPolicyGraph)
     def extra_compute_grad_fetches(self):
-        return self._stats_fetches
+        return {
+            "stats": self.stats,
+        }
 
     @override(TFPolicyGraph)
     def extra_compute_action_fetches(self):

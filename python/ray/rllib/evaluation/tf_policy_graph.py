@@ -387,6 +387,7 @@ class TFPolicyGraph(PolicyGraph):
         builder.add_feed_dict(self._get_loss_inputs_dict(postprocessed_batch))
         fetches = builder.add_fetches(
             [self._grads, self._get_grad_and_stats_fetches()])
+        import pdb; pdb.set_trace()
         return fetches[0], fetches[1]
 
     def _build_apply_gradients(self, builder, gradients):
