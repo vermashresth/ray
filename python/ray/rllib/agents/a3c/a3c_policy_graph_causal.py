@@ -40,8 +40,40 @@ class A3CLoss(object):
                            self.entropy * entropy_coeff)
 
 class MOALoss(object):
-    def __init__(self):
-        pass
+    def __init__(self, action_logits, true_actions, num_actions, num_agents,
+                 loss_weight=1.0):
+        """Train MOA model with supervised cross entropy loss on a trajectory.
+
+        Note that the model is trying to predict others' actions at timestep t+1
+        given all actions and its own egocentric view of the world at timestep t.
+
+        Returns:
+            A scalar loss tensor (cross-entropy loss).
+        """
+        # Reshape to [B, N, A]
+        action_logits = tf.reshape(action_logits, [-1, num_agents, num_actions])
+        tf.Print(action_logits, [tf.shape(action_logits)], message="action logits shape")
+
+        # Remove the prediction for the final step, since we don't have a ground-
+        # truth t+1 answer for this step.
+        action_logits = action_logits[:-1, :, :]  # [B, N, A]
+
+        # Limit ground truth others' actions to start at the first step of the 
+        # trajectory, since we want to predict the actions at t+1 from t.
+        true_actions = true_actions[1:, :]  # [B, N]
+        tf.Print(true_actions, [tf.shape(true_actions)], message="true actions shape")
+
+        # Flatten actions of other agents into a big list for comparison.
+        flat_logits = tf.reshape(action_logits, [-1, num_actions])
+        flat_labels = tf.reshape(true_actions, [-1])
+
+        self.ce_per_entry = tf.nn.sparse_softmax_cross_entropy_with_logits(
+            labels=flat_labels, logits=flat_logits)
+        self.total_loss = tf.reduce_mean(self.ce_per_entry)
+        tf.Print(self.total_loss, [self.total_loss], message="MOA CE loss")
+        
+        #TODO(natashajaques): Add something to train only when other agents are
+        # visible here
 
 
 class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
@@ -61,10 +93,6 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Add other agents actions placeholder for conditioning possible
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents), name="others_actions")
-        
-        # Add others next actions for training model of other agents
-        self.others_next_actions = tf.placeholder(tf.int32,
-            shape=(None, self.num_other_agents), name="others_next_actions")
 
         dist_class, logit_dim = ModelCatalog.get_action_dist(
             action_space, self.config["model"])
@@ -85,16 +113,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             }, observation_space, logit_dim, moa_dim, self.config["model"], 
             lstm1_name="policy", lstm2_name="moa")
         
-
         action_dist = dist_class(self.rl_model.outputs)
         self.vf = self.rl_model.value_function()
         self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                           tf.get_variable_scope().name)
-
-        import pdb; pdb.set_trace()
-        # Setup the MOA loss
-        self.moa_preds = self.moa.outputs
-        #TODO: may want to reshape and softmax
 
         # Setup the policy loss
         if isinstance(action_space, gym.spaces.Box):
@@ -111,6 +133,13 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.rl_loss = A3CLoss(action_dist, actions, advantages, self.v_target,
                             self.vf, self.config["vf_loss_coeff"],
                             self.config["entropy_coeff"])
+
+        # Setup the MOA loss
+        self.moa_preds = tf.nn.softmax(self.moa.outputs)
+        self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
+                                logit_dim, self.num_other_agents)
+
+        self.total_loss = self.rl_loss.total_loss + self.moa_loss.total_loss
 
         # Initialize TFPolicyGraph
         loss_in = [
@@ -132,25 +161,26 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             obs_input=self.observations,
             action_sampler=action_dist.sample(),
             action_prob=action_dist.sampled_action_prob(),
-            loss=self.loss.total_loss,
+            loss=self.total_loss,
             model=self.rl_model,
             loss_inputs=loss_in,
-            state_inputs=self.rl_model.state_in,
-            state_outputs=self.rl_model.state_out,
+            state_inputs=self.rl_model.state_in + self.moa.state_in,
+            state_outputs=self.rl_model.state_out + self.moa.state_out,
             prev_action_input=prev_actions,
             prev_reward_input=prev_rewards,
             seq_lens=self.rl_model.seq_lens,
             max_seq_len=self.config["model"]["max_seq_len"])
 
-        self.stats_fetches = {
+        self._stats_fetches = {
             "stats": {
                 "cur_lr": tf.cast(self.cur_lr, tf.float64),
-                "policy_loss": self.loss.pi_loss,
-                "policy_entropy": self.loss.entropy,
+                "policy_loss": self.rl_loss.pi_loss,
+                "policy_entropy": self.rl_loss.entropy,
                 "grad_gnorm": tf.global_norm(self._grads),
                 "var_gnorm": tf.global_norm(self.var_list),
-                "vf_loss": self.loss.vf_loss,
+                "vf_loss": self.rl_loss.vf_loss,
                 "vf_explained_var": explained_variance(self.v_target, self.vf),
+                "moa_loss": self.moa_loss.total_loss
             },
         }
 
@@ -158,14 +188,14 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
     @override(PolicyGraph)
     def get_initial_state(self):
-        return self.model.state_init
+        return self.rl_model.state_init + self.moa.state_init
 
     @override(PolicyGraph)
     def postprocess_trajectory(self,
                                sample_batch,
                                other_agent_batches=None,
                                episode=None):
-        # Extract and storeother agents' actions.
+        # Extract and other agents' actions.
         others_actions = self.extract_last_actions_from_episodes(
             other_agent_batches, batch_type=True)
         sample_batch['others_actions'] = others_actions
@@ -175,7 +205,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             last_r = 0.0
         else:
             next_state = []
-            for i in range(len(self.model.state_in)):
+            for i in range(len(self.rl_model.state_in)):
                 next_state.append([sample_batch["state_out_{}".format(i)][-1]])
             prev_action = sample_batch['prev_actions'][-1]
             prev_reward = sample_batch['prev_rewards'][-1]
@@ -184,8 +214,9 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                                  others_actions[-1], prev_action, prev_reward, 
                                  *next_state)
 
-        return compute_advantages(sample_batch, last_r, self.config["gamma"],
-                                  self.config["lambda"])
+        sample_batch = compute_advantages(sample_batch, last_r, self.config["gamma"],
+                                          self.config["lambda"])
+        return sample_batch
 
     def extract_last_actions_from_episodes(self, episodes, batch_type=False,
                                            exclude_self=True):
@@ -251,7 +282,9 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                                self.others_actions: others_actions})
 
         if state_batches:
-            builder.add_feed_dict({self._seq_lens: np.ones(len(obs_batch))})
+            seq_lens = np.ones(len(obs_batch))
+            builder.add_feed_dict({self._seq_lens: seq_lens,
+                                   self.moa.seq_lens: seq_lens})
         if self._prev_action_input is not None and prev_action_batch:
             builder.add_feed_dict({self._prev_action_input: prev_action_batch})
         if self._prev_reward_input is not None and prev_reward_batch:
@@ -262,6 +295,11 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                                       [self.extra_compute_action_fetches()])
         return fetches[0], fetches[1:-1], fetches[-1]
 
+    def _get_loss_inputs_dict(self, batch):
+        # Override parent function to add seq_lens to tensor for additional LSTM
+        loss_inputs = super(A3CPolicyGraph, self)._get_loss_inputs_dict(batch)
+        loss_inputs[self.moa.seq_lens] = loss_inputs[self._seq_lens]
+        return loss_inputs
 
     @override(TFPolicyGraph)
     def gradients(self, optimizer):
@@ -272,7 +310,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
     @override(TFPolicyGraph)
     def extra_compute_grad_fetches(self):
-        return self.stats_fetches
+        return self._stats_fetches
 
     @override(TFPolicyGraph)
     def extra_compute_action_fetches(self):

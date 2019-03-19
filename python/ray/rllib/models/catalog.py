@@ -423,7 +423,6 @@ class ModelCatalog(object):
                 lstm1.state_out))
 
             lstm1._validate_output_shape()
-        import pdb; pdb.set_trace()
 
         # Create LSTM 2
         with tf.variable_scope(lstm2_name):
@@ -439,5 +438,5 @@ class ModelCatalog(object):
                 lstm2.state_out))
 
             lstm2._validate_output_shape()
-        import pdb; pdb.set_trace()
+
         return lstm1, lstm2
