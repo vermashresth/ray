@@ -82,6 +82,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Extract info from config
         self.num_other_agents = config['num_other_agents']
         self.agent_id = config['agent_id']
+        self.moa_weight = config['model']['custom_options']['moa_weight']
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -134,7 +135,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Setup the MOA loss
         self.moa_preds = self.moa.outputs
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                logit_dim, self.num_other_agents)
+                                logit_dim, self.num_other_agents,
+                                loss_weight=self.moa_weight)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
         # Total loss
