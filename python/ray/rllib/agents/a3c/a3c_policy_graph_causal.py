@@ -44,29 +44,26 @@ class MOALoss(object):
                  loss_weight=1.0):
         """Train MOA model with supervised cross entropy loss on a trajectory.
 
-        Note that the model is trying to predict others' actions at timestep t+1
-        given all actions and its own egocentric view of the world at timestep t.
+        The model is trying to predict others' actions at timestep t+1 given all 
+        actions at timestep t.
 
         Returns:
             A scalar loss tensor (cross-entropy loss).
         """
         # Reshape to [B, N, A]
         action_logits = tf.reshape(action_logits, [-1, num_agents, num_actions])
-        tf.Print(action_logits, [tf.shape(action_logits)], message="action logits shape")
 
-        # Remove the prediction for the final step, since we don't have a ground-
-        # truth t+1 answer for this step.
+        # Remove the prediction for the final step, since t+1 is not known for
+        # this step.
         action_logits = action_logits[:-1, :, :]  # [B, N, A]
 
-        # Limit ground truth others' actions to start at the first step of the 
-        # trajectory, since we want to predict the actions at t+1 from t.
+        # Ensure ground truth others' actions to start at the t+1 step, since 
+        # we want to predict the actions at t+1 from t.
         true_actions = true_actions[1:, :]  # [B, N]
-        tf.Print(true_actions, [tf.shape(true_actions)], message="true actions shape")
 
-        # Flatten actions of other agents into a big list for comparison.
+        # Compute softmax cross entropy
         flat_logits = tf.reshape(action_logits, [-1, num_actions])
         flat_labels = tf.reshape(true_actions, [-1])
-
         self.ce_per_entry = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=flat_labels, logits=flat_logits)
         self.total_loss = tf.reduce_mean(self.ce_per_entry)
@@ -135,10 +132,12 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                             self.config["entropy_coeff"])
 
         # Setup the MOA loss
-        self.moa_preds = tf.nn.softmax(self.moa.outputs)
+        self.moa_preds = self.moa.outputs
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
                                 logit_dim, self.num_other_agents)
+        self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
+        # Total loss
         self.total_loss = self.rl_loss.total_loss + self.moa_loss.total_loss
 
         # Initialize TFPolicyGraph
@@ -291,7 +290,6 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         builder.add_feed_dict(dict(zip(self._state_inputs, state_batches)))
         fetches = builder.add_fetches([self._sampler] + self._state_outputs +
                                       [self.extra_compute_action_fetches()])
-        import pdb; pdb.set_trace()
         return fetches[0], fetches[1:-1], fetches[-1]
 
     def _get_loss_inputs_dict(self, batch):

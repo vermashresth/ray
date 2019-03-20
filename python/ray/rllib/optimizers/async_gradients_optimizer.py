@@ -50,8 +50,12 @@ class AsyncGradientsOptimizer(PolicyOptimizer):
                 gradient, info = ray.get(future)
                 e = pending_gradients.pop(future)
 
+                multiagent = self.local_evaluator.policy_config['multiagent']
                 if "stats" in info:
                     self.learner_stats = info["stats"]
+                elif multiagent:
+                    for policy_id in multiagent['policy_graphs'].keys():
+                        self.learner_stats[policy_id] = info[policy_id]['stats']
 
             if gradient is not None:
                 with self.apply_timer:
