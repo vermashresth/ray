@@ -89,7 +89,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             tf.float32, [None] + list(observation_space.shape))
 
         # Add other agents actions placeholder for MOA preds
-        # Add 1 to include own action.
+        # Add 1 to include own action. Note: agent's own actions will always 
+        # form the first column of this tensor.
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents + 1), name="others_actions")
 
@@ -99,7 +100,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
 
         # Compute output size of model of other agents (MOA)
-        moa_dim = logit_dim * self.num_other_agents
+        moa_dim = logit_dim * (self.num_other_agents + 1)
         
         # We now create two models, one for the policy, and one for the model
         # of other agents (MOA)
@@ -136,7 +137,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Setup the MOA loss
         self.moa_preds = self.moa.outputs
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                logit_dim, self.num_other_agents,
+                                logit_dim, self.num_other_agents + 1,
                                 loss_weight=self.moa_weight)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
@@ -195,10 +196,12 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                                sample_batch,
                                other_agent_batches=None,
                                episode=None):
-        # Extract and other agents' actions.
-        others_actions = self.extract_last_actions_from_episodes(
-            other_agent_batches, batch_type=True)
-        sample_batch['others_actions'] = others_actions
+        # Extract matrix of self and other agents' actions.
+        own_actions = np.atleast_2d(np.array(sample_batch['actions']))
+        own_actions = np.reshape(own_actions, [-1,1])
+        all_actions = self.extract_last_actions_from_episodes(
+            other_agent_batches, own_actions=own_actions, batch_type=True)
+        sample_batch['others_actions'] = all_actions
 
         completed = sample_batch["dones"][-1]
         if completed:
@@ -211,15 +214,15 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             prev_reward = sample_batch['prev_rewards'][-1]
             
             last_r = self._value(sample_batch["new_obs"][-1], 
-                                 others_actions[-1], prev_action, prev_reward, 
+                                 all_actions[-1], prev_action, prev_reward, 
                                  *next_state)
 
         sample_batch = compute_advantages(sample_batch, last_r, self.config["gamma"],
                                           self.config["lambda"])
         return sample_batch
 
-    def extract_last_actions_from_episodes(self, episodes, batch_type=False,
-                                           exclude_self=True):
+    def extract_last_actions_from_episodes(self, episodes, batch_type=False, 
+                                           own_actions=None):
         """Pulls every other agent's previous actions out of structured data.
         Args:
             episodes: the structured data type. Typically a dict of episode
@@ -227,30 +230,37 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             batch_type: if True, the structured data is a dict of tuples,
                 where the second tuple element is the relevant dict containing
                 previous actions.
-            exclude_self: If True, will not include the agent's own actions in
-                the returned array.
+            own_actions: an array of the agents own actions. If provided, will
+                be the first column of the created action matrix.
         Returns: a real valued array of size [batch, num_other_agents] (meaning
             each agents' actions goes down one column, each row is a timestep)
         """
         if episodes is None:
             print("Why are there no episodes?")
             import pdb; pdb.set_trace()
+
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
         agent_ids = sorted(episodes.keys())
         prev_actions = []
 
         for agent_id in agent_ids:
-            if exclude_self and agent_id == self.agent_id:
+            if agent_id == self.agent_id:
                 continue
             if batch_type:
                 prev_actions.append(episodes[agent_id][1]['actions'])
             else:
                 prev_actions.append(
                     [e.prev_action for e in episodes[agent_id]])
-
+        
         # Need a transpose to make a [batch_size, num_other_agents] tensor
-        return np.transpose(np.array(prev_actions))
+        all_actions = np.transpose(np.array(prev_actions))
+        
+        # Attach agents own actions as column 1
+        if own_actions is not None:
+            all_actions = np.hstack((own_actions, all_actions))
+
+        return all_actions
 
     @override(TFPolicyGraph)
     def _build_compute_actions(self,
@@ -267,8 +277,11 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                 format(self._state_inputs, state_batches))
         builder.add_feed_dict(self.extra_compute_action_feed_dict())
 
-        # Need to compute other agents' actions.
-        others_actions = self.extract_last_actions_from_episodes(episodes)
+        # Extract matrix of other agents' past actions, including agent's own
+        own_actions = np.atleast_2d(np.array(
+            [e.prev_action for e in episodes[self.agent_id]]))
+        all_actions = self.extract_last_actions_from_episodes(
+            episodes, own_actions=own_actions)
 
         # Debugging:
         # if self.agent_id == 'agent-0':
@@ -279,7 +292,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             # print(np.transpose(np.array(prev_actions)))
 
         builder.add_feed_dict({self._obs_input: obs_batch,
-                               self.others_actions: others_actions})
+                               self.others_actions: all_actions})
 
         if state_batches:
             seq_lens = np.ones(len(obs_batch))
