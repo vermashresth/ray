@@ -83,8 +83,6 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.num_other_agents = config['num_other_agents']
         self.agent_id = config['agent_id']
         self.moa_weight = config['model']['custom_options']['moa_weight']
-        self.num_counterfactuals = 10 #TODO: replace
-        self.influence_reward_clip = 100
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -192,6 +190,68 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
     def get_initial_state(self):
         return self.rl_model.state_init + self.moa.state_init
 
+    @override(PolicyGraph)
+    def postprocess_trajectory(self,
+                               sample_batch,
+                               other_agent_batches=None,
+                               episode=None):
+        # Extract and other agents' actions.
+        others_actions = self.extract_last_actions_from_episodes(
+            other_agent_batches, batch_type=True)
+        sample_batch['others_actions'] = others_actions
+
+        completed = sample_batch["dones"][-1]
+        if completed:
+            last_r = 0.0
+        else:
+            next_state = []
+            for i in range(len(self.rl_model.state_in)):
+                next_state.append([sample_batch["state_out_{}".format(i)][-1]])
+            prev_action = sample_batch['prev_actions'][-1]
+            prev_reward = sample_batch['prev_rewards'][-1]
+            
+            last_r = self._value(sample_batch["new_obs"][-1], 
+                                 others_actions[-1], prev_action, prev_reward, 
+                                 *next_state)
+
+        sample_batch = compute_advantages(sample_batch, last_r, self.config["gamma"],
+                                          self.config["lambda"])
+        return sample_batch
+
+    def extract_last_actions_from_episodes(self, episodes, batch_type=False,
+                                           exclude_self=True):
+        """Pulls every other agent's previous actions out of structured data.
+        Args:
+            episodes: the structured data type. Typically a dict of episode
+                objects.
+            batch_type: if True, the structured data is a dict of tuples,
+                where the second tuple element is the relevant dict containing
+                previous actions.
+            exclude_self: If True, will not include the agent's own actions in
+                the returned array.
+        Returns: a real valued array of size [batch, num_other_agents] (meaning
+            each agents' actions goes down one column, each row is a timestep)
+        """
+        if episodes is None:
+            print("Why are there no episodes?")
+            import pdb; pdb.set_trace()
+        # Need to sort agent IDs so same agent is consistently in
+        # same part of input space.
+        agent_ids = sorted(episodes.keys())
+        prev_actions = []
+
+        for agent_id in agent_ids:
+            if exclude_self and agent_id == self.agent_id:
+                continue
+            if batch_type:
+                prev_actions.append(episodes[agent_id][1]['actions'])
+            else:
+                prev_actions.append(
+                    [e.prev_action for e in episodes[agent_id]])
+
+        # Need a transpose to make a [batch_size, num_other_agents] tensor
+        return np.transpose(np.array(prev_actions))
+
     @override(TFPolicyGraph)
     def _build_compute_actions(self,
                                builder,
@@ -272,122 +332,3 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             feed_dict[k] = v
         vf = self.sess.run(self.vf, feed_dict)
         return vf[0]
-
-    def extract_last_actions_from_episodes(self, episodes, batch_type=False,
-                                           exclude_self=True):
-        """Pulls every other agent's previous actions out of structured data.
-        Args:
-            episodes: the structured data type. Typically a dict of episode
-                objects.
-            batch_type: if True, the structured data is a dict of tuples,
-                where the second tuple element is the relevant dict containing
-                previous actions.
-            exclude_self: If True, will not include the agent's own actions in
-                the returned array.
-        Returns: a real valued array of size [batch, num_other_agents] (meaning
-            each agents' actions goes down one column, each row is a timestep)
-        """
-        if episodes is None:
-            print("Why are there no episodes?")
-            import pdb; pdb.set_trace()
-        # Need to sort agent IDs so same agent is consistently in
-        # same part of input space.
-        agent_ids = sorted(episodes.keys())
-        prev_actions = []
-
-        for agent_id in agent_ids:
-            if exclude_self and agent_id == self.agent_id:
-                continue
-            if batch_type:
-                prev_actions.append(episodes[agent_id][1]['actions'])
-            else:
-                prev_actions.append(
-                    [e.prev_action for e in episodes[agent_id]])
-
-        # Need a transpose to make a [batch_size, num_other_agents] tensor
-        return np.transpose(np.array(prev_actions))
-
-    @override(PolicyGraph)
-    def postprocess_trajectory(self,
-                               sample_batch,
-                               other_agent_batches=None,
-                               episode=None):
-        # Extract and other agents' actions.
-        others_actions = self.extract_last_actions_from_episodes(
-            other_agent_batches, batch_type=True)
-        sample_batch['others_actions'] = others_actions
-        import pdb; pdb.set_trace()
-
-        # Compute causal social influence reward.
-        #sample_batch = self.compute_influence_reward(sample_batch)
-
-        completed = sample_batch["dones"][-1]
-        if completed:
-            last_r = 0.0
-        else:
-            next_state = []
-            for i in range(len(self.rl_model.state_in)):
-                next_state.append([sample_batch["state_out_{}".format(i)][-1]])
-            prev_action = sample_batch['prev_actions'][-1]
-            prev_reward = sample_batch['prev_rewards'][-1]
-            
-            last_r = self._value(sample_batch["new_obs"][-1], 
-                                 others_actions[-1], prev_action, prev_reward, 
-                                 *next_state)
-
-        sample_batch = compute_advantages(sample_batch, last_r, self.config["gamma"],
-                                          self.config["lambda"])
-        return sample_batch
-
-    def compute_influence_reward(self, trajectory):
-        # compute modified input batch with counterfactual actions for me
-        # Run MOA with modified input
-        # Sum to get marginalized policy
-        # do KL between marginal and real policy
-        # add that as influence to rewards in my sample_batch
-        import pdb; pdb.set_trace()
-        true_logits = self.predict_others_next_action()
-
-        counterfactual_actions = self.sample_counterfactuals(trajectory)
-        (tiled_other_actions, 
-         tiled_obs) = self.tile_inputs(trajectory)
-        
-        counterfactual_logits = self.predict_others_next_action(
-            tiled_obs, counterfactual_actions, tiled_other_actions)
-
-        # Reshape to [B, N, A]
-        # Sum to marginalize
-        #marginal_logits
-
-        # Stop gradients from flowing from rewards into MOA
-        true_logits = tf.stop_gradient(true_logits)
-        #marginal_logits = tf.stop_gradient(marginal_logits)
-
-        # Reshape to [B * N, A]
-
-        if self.policy_comparison_func == 'kl':
-            influence = kl_divergence(true_logits, marginal_logits)
-
-        # Clip influence reward
-        influence = tf.clip_by_value(influence, -self.influence_reward_clip,
-                                     self.influence_reward_clip)
-
-        #influence = tf.reshape(influence, [trajectory_len, self._num_other_agents])
-
-        # Zero out influence reward for steps where the other agent isn't visible.
-        pass
-
-    def sample_counterfactuals(self, trajectory):
-        self.num_counterfactuals
-        pass
-
-    def tile_inputs(self, trajectory):
-        # need to tile 'others_actions', 'state_in_2', 'state_in_3', 'obs'
-        # THIS MAY NOT BE NEEDED DEPENDING ON HOW MOA IS CONSTRUCTED
-        self.num_counterfactuals
-        pass
-
-    def predict_others_next_action(self, obs, actions, others_actions):
-        pass
-
-    
