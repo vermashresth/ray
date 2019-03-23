@@ -7,6 +7,7 @@ from __future__ import print_function
 import tensorflow as tf
 import numpy as np
 import gym
+import copy
 
 import ray
 from ray.rllib.utils.error import UnsupportedSpaceException
@@ -83,8 +84,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.num_other_agents = config['num_other_agents']
         self.agent_id = config['agent_id']
         self.moa_weight = config['model']['custom_options']['moa_weight']
-        self.num_counterfactuals = 10 #TODO: replace
-        self.influence_reward_clip = 100
+        self.num_counterfactuals = 12 #TODO: replace
+        self.influence_reward_clip = 10 #TODO: replace
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -96,13 +97,13 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents + 1), name="others_actions")
 
-        dist_class, logit_dim = ModelCatalog.get_action_dist(
+        dist_class, self.num_actions = ModelCatalog.get_action_dist(
             action_space, self.config["model"])
         prev_actions = ModelCatalog.get_action_placeholder(action_space)
         prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
 
         # Compute output size of model of other agents (MOA)
-        moa_dim = logit_dim * (self.num_other_agents + 1)
+        moa_dim = self.num_actions * (self.num_other_agents + 1)
         
         # We now create two models, one for the policy, and one for the model
         # of other agents (MOA)
@@ -112,10 +113,11 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                 "prev_actions": prev_actions,
                 "prev_rewards": prev_rewards,
                 "is_training": self._get_is_training_placeholder(),
-            }, observation_space, logit_dim, moa_dim, self.config["model"], 
-            lstm1_name="policy", lstm2_name="moa")
+            }, observation_space, self.num_actions, moa_dim, 
+            self.config["model"], lstm1_name="policy", lstm2_name="moa")
         
         action_dist = dist_class(self.rl_model.outputs)
+        self.action_probs = tf.nn.softmax(self.rl_model.outputs)
         self.vf = self.rl_model.value_function()
         self.var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES,
                                           tf.get_variable_scope().name)
@@ -139,7 +141,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Setup the MOA loss
         self.moa_preds = self.moa.outputs
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                logit_dim, self.num_other_agents + 1,
+                                self.num_actions, self.num_other_agents + 1,
                                 loss_weight=self.moa_weight)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
@@ -266,6 +268,14 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             (args, self.rl_model.state_in)
         for k, v in zip(self.rl_model.state_in, args):
             feed_dict[k] = v
+        
+        # Debugging
+        # for k in feed_dict.keys():
+        #     if type(feed_dict[k]) == list:
+        #         print(k, len(feed_dict[k]))
+        #     else:
+        #         print(k, feed_dict[k].shape)
+        
         vf = self.sess.run(self.vf, feed_dict)
         return vf[0]
 
@@ -322,7 +332,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         sample_batch['others_actions'] = all_actions
 
         # Compute causal social influence reward.
-        #sample_batch = self.compute_influence_reward(sample_batch)
+        sample_batch = self.compute_influence_reward(sample_batch)
 
         completed = sample_batch["dones"][-1]
         if completed:
@@ -343,28 +353,26 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         return sample_batch
 
     def compute_influence_reward(self, trajectory):
-        # compute modified input batch with counterfactual actions for me
-        # Run MOA with modified input
-        # Sum to get marginalized policy
-        # do KL between marginal and real policy
-        # add that as influence to rewards in my sample_batch
-        import pdb; pdb.set_trace()
-        true_logits = self.predict_others_next_action()
+        """compute modified input batch with counterfactual actions for me
+        Run MOA with modified input
+        Sum to get marginalized policy
+        do KL between marginal and real policy
+        add that as influence to rewards in my sample_batch
+        """
+        # Remove own actions from other agents' actions
+        true_logits, true_probs = self.predict_others_next_action(trajectory)
 
         counterfactual_actions = self.sample_counterfactuals(trajectory)
-        (tiled_other_actions, 
-         tiled_obs) = self.tile_inputs(trajectory)
         
-        counterfactual_logits = self.predict_others_next_action(
-            tiled_obs, counterfactual_actions, tiled_other_actions)
+        (marginal_logits, 
+         marginal_probs) = self.use_counterfactuals_to_marginalize_predictions(
+            trajectory, counterfactual_actions)
 
-        # Reshape to [B, N, A]
-        # Sum to marginalize
-        #marginal_logits
-
-        # Stop gradients from flowing from rewards into MOA
-        true_logits = tf.stop_gradient(true_logits)
-        #marginal_logits = tf.stop_gradient(marginal_logits)
+        # Remove own action from preds
+        true_logits = self.format_action_preds(true_logits)
+        true_probs = self.reshape_action_preds_remove_self(true_probs)
+        marginal_logits = self.reshape_action_preds_remove_self(marginal_logits)
+        marginal_probs = self.reshape_action_preds_remove_self(marginal_probs)
 
         # Reshape to [B * N, A]
 
@@ -378,19 +386,70 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         #influence = tf.reshape(influence, [trajectory_len, self._num_other_agents])
 
         # Zero out influence reward for steps where the other agent isn't visible.
-        pass
+        return trajectory
+
+    def reshape_action_preds_remove_self(self, logits):
+        preds = np.reshape(
+            preds, [-1, self.num_other_agents + 1, self.num_actions])
+        # Chop off predictions about self's own actions, can't influence self.
+        return preds[:,1:,:]
 
     def sample_counterfactuals(self, trajectory):
-        self.num_counterfactuals
-        pass
+        action_probs = self.get_action_probabilities(trajectory)
+        possible_actions = np.arange(self.num_actions)
+        counterfactuals = []
+        for i in range(len(action_probs)):
+            counterfactuals.append(
+                np.random.choice(possible_actions, 
+                                 size=self.num_counterfactuals, 
+                                 p=action_probs[i]))
+        return np.stack(counterfactuals)
 
-    def tile_inputs(self, trajectory):
-        # need to tile 'others_actions', 'state_in_2', 'state_in_3', 'obs'
-        # THIS MAY NOT BE NEEDED DEPENDING ON HOW MOA IS CONSTRUCTED
-        self.num_counterfactuals
-        pass
+    def use_counterfactuals_to_marginalize_predictions(self, trajectory, 
+                                                       counterfactual_actions):
+        traj = copy.deepcopy(trajectory)
+        others_actions = trajectory['others_actions'][:,1:]
 
-    def predict_others_next_action(self, obs, actions, others_actions):
-        pass
+        counter_preds = []
+        counter_probs = []
+        for i in range(self.num_counterfactuals):
+            counters = np.reshape(
+                np.atleast_2d(counterfactual_actions[:,i]), [-1,1])
+            traj['others_actions'] = np.hstack((counters, others_actions))
+            preds, probs = self.predict_others_next_action(traj)
+            counter_preds.append(preds)
+            counter_probs.append(probs)
+        counter_preds = np.array(counter_preds)
+        counter_probs = np.array(counter_probs)
 
+        marginal_preds = np.sum(counter_preds, axis=0)
+        marginal_probs = np.sum(counter_probs, axis=0)
+
+        return marginal_preds, marginal_probs
+
+    def predict_others_next_action(self, trajectory):
+        traj_len = len(trajectory['obs'])
+        feed_dict = {
+            self.observations: trajectory['obs'], 
+            self.others_actions: trajectory['others_actions'],
+            self.moa.seq_lens: [traj_len],
+            self._prev_action_input: trajectory['prev_actions'],
+            self._prev_reward_input: trajectory['prev_rewards']
+        }
+        start_state = len(self.rl_model.state_in)
+        for i, v in enumerate(self.moa.state_in):
+            feed_dict[v] = [trajectory['state_in_' + str(i + start_state)][0,:]]
+        return self.sess.run([self.moa_preds, self.moa_action_probs], feed_dict)
     
+    def get_action_probabilities(self, trajectory):
+        traj_len = len(trajectory['obs'])
+        feed_dict = {
+            self.observations: trajectory['obs'], 
+            self.others_actions: trajectory['others_actions'],
+            self.rl_model.seq_lens: [traj_len],
+            self._prev_action_input: trajectory['prev_actions'],
+            self._prev_reward_input: trajectory['prev_rewards']
+        }
+        for i, v in enumerate(self.rl_model.state_in):
+            feed_dict[v] = [trajectory['state_in_' + str(i)][0,:]]
+        return self.sess.run(self.action_probs, feed_dict)
