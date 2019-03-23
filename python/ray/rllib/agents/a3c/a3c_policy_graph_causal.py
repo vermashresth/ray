@@ -19,7 +19,7 @@ from ray.rllib.evaluation.tf_policy_graph import TFPolicyGraph, \
 from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.utils.annotations import override
 
-def kl_divergence(p, q):
+def kl_div(p, q):
     """Kullback-Leibler divergence D(P || Q) for discrete probability dists
     
     Assumes the probability dist is over the last dimension. 
@@ -93,11 +93,12 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Extract info from config
         self.num_other_agents = config['num_other_agents']
         self.agent_id = config['agent_id']
-        self.moa_weight = config['model']['custom_options']['moa_weight']
-        self.num_counterfactuals = 12 #TODO: replace
-        self.influence_reward_clip = 10 #TODO: replace
-        self.influence_divergence_measure = 'kl'
-        self.influence_reward_weight = 2.5
+
+        cust_opts = config['model']['custom_options']
+        self.moa_weight = cust_opts['moa_weight']
+        self.influence_reward_clip = cust_opts['influence_reward_clip']
+        self.influence_divergence_measure = cust_opts['influence_divergence_measure']
+        self.influence_reward_weight = cust_opts['influence_reward_weight']
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -343,7 +344,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             other_agent_batches, own_actions=own_actions, batch_type=True)
         sample_batch['others_actions'] = all_actions
 
-        # Compute causal social influence reward.
+        # Compute causal social influence reward and add to batch.
         sample_batch = self.compute_influence_reward(sample_batch)
 
         completed = sample_batch["dones"][-1]
@@ -365,11 +366,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         return sample_batch
 
     def compute_influence_reward(self, trajectory):
-        """compute modified input batch with counterfactual actions for me
-        Run MOA with modified input
-        Sum to get marginalized policy
-        do KL between marginal and real policy
-        add that as influence to rewards in my sample_batch
+        """Compute influence of this agent on other agents and add to rewards.
         """
         # Predict the next action for all other agents. Shape is [B, N, A]
         true_logits, true_probs = self.predict_others_next_action(trajectory)
@@ -379,12 +376,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
          marginal_probs) = self.marginalize_predictions_over_own_actions(
              trajectory)  # [B, N, A]
 
+        # Compute influence using different divergence metrics
         if self.influence_divergence_measure == 'kl':
-            # [B, N]
-            influence_per_agent = kl_divergence(true_probs, marginal_probs) 
-        
-        # TODO(natashajaques): more policy comparison functions here. Consider
-        # Wasserstein distance, for example.
+            influence_per_agent = kl_div(true_probs, marginal_probs)  # [B, N]
+        # TODO(natashamjaques): more policy comparison functions here.
         
         influence = np.sum(influence_per_agent, axis=-1)
 
