@@ -97,6 +97,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.num_counterfactuals = 12 #TODO: replace
         self.influence_reward_clip = 10 #TODO: replace
         self.influence_divergence_measure = 'kl'
+        self.influence_reward_weight = 2.5
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -372,16 +373,16 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         """
         # Predict the next action for all other agents. Shape is [B, N, A]
         true_logits, true_probs = self.predict_others_next_action(trajectory)
-
-        counterfactual_actions = self.sample_counterfactuals(trajectory)
         
+        # Get marginal predictions where effect of self is marginalized out
         (marginal_logits, 
-         marginal_probs) = self.use_counterfactuals_to_marginalize_predictions(
-            trajectory, counterfactual_actions)  # [B, N, A]
+         marginal_probs) = self.marginalize_predictions_over_own_actions(
+             trajectory)  # [B, N, A]
 
         if self.influence_divergence_measure == 'kl':
             # [B, N]
             influence_per_agent = kl_divergence(true_probs, marginal_probs) 
+        
         # TODO(natashajaques): more policy comparison functions here. Consider
         # Wasserstein distance, for example.
         
@@ -393,32 +394,26 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         # TODO: Zero out influence reward for steps where the other agent isn't visible.
 
-        import pdb; pdb.set_trace()
-        trajetory['rewards']
+        trajectory['rewards'] = trajectory['rewards'] + \
+            (influence * self.influence_reward_weight)
 
         return trajectory
 
-    def sample_counterfactuals(self, trajectory):
+    def marginalize_predictions_over_own_actions(self, trajectory):
+        # Run policy to get probability of each action in original trajectory
         action_probs = self.get_action_probabilities(trajectory)
-        possible_actions = np.arange(self.num_actions)
-        counterfactuals = []
-        for i in range(len(action_probs)):
-            counterfactuals.append(
-                np.random.choice(possible_actions, 
-                                 size=self.num_counterfactuals, 
-                                 p=action_probs[i]))
-        return np.stack(counterfactuals)
 
-    def use_counterfactuals_to_marginalize_predictions(self, trajectory, 
-                                                       counterfactual_actions):
-        traj = copy.deepcopy(trajectory)
         others_actions = trajectory['others_actions'][:,1:]
-
+        traj = copy.deepcopy(trajectory)
+        traj_len = len(trajectory['obs'])
+        
         counter_preds = []
         counter_probs = []
-        for i in range(self.num_counterfactuals):
-            counters = np.reshape(
-                np.atleast_2d(counterfactual_actions[:,i]), [-1,1])
+
+        # Cycle through all possible actions and get predictions for what other
+        # agents would do if this action was taken at each trajectory step.
+        for i in range(self.num_actions):
+            counters = np.tile([i], [traj_len, 1])
             traj['others_actions'] = np.hstack((counters, others_actions))
             preds, probs = self.predict_others_next_action(traj)
             counter_preds.append(preds)
@@ -429,7 +424,12 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         marginal_preds = np.sum(counter_preds, axis=0)
         marginal_probs = np.sum(counter_probs, axis=0)
 
-        # Renormalize probs to ensure probability
+        # Multiply by probability of each action to renormalize probability
+        tiled_probs = np.tile(action_probs, 4), 
+        tiled_probs = np.reshape(
+            tiled_probs, [traj_len, self.num_other_agents, self.num_actions])
+        marginal_preds = np.multiply(marginal_preds, tiled_probs)
+        marginal_probs = np.multiply(marginal_probs, tiled_probs)
 
         return marginal_preds, marginal_probs
 
