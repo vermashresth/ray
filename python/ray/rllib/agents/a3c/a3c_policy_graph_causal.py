@@ -41,8 +41,8 @@ class A3CLoss(object):
                            self.entropy * entropy_coeff)
 
 class MOALoss(object):
-    def __init__(self, action_logits, true_actions, num_actions, num_agents,
-                 loss_weight=1.0):
+    def __init__(self, action_logits, true_actions, num_actions, 
+                 num_other_agents, loss_weight=1.0):
         """Train MOA model with supervised cross entropy loss on a trajectory.
 
         The model is trying to predict others' actions at timestep t+1 given all 
@@ -52,15 +52,16 @@ class MOALoss(object):
             A scalar loss tensor (cross-entropy loss).
         """
         # Reshape to [B, N, A]
-        action_logits = tf.reshape(action_logits, [-1, num_agents, num_actions])
+        action_logits = tf.reshape(action_logits, 
+                                   [-1, num_other_agents, num_actions])
 
         # Remove the prediction for the final step, since t+1 is not known for
         # this step.
         action_logits = action_logits[:-1, :, :]  # [B, N, A]
 
-        # Ensure ground truth others' actions to start at the t+1 step, since 
-        # we want to predict the actions at t+1 from t.
-        true_actions = true_actions[1:, :]  # [B, N]
+        # Remove first agent (self) and first action, because we want to predict
+        # the t+1 actions of other agents from all actions at t.
+        true_actions = true_actions[1:, 1:]  # [B, N]
 
         # Compute softmax cross entropy
         flat_logits = tf.reshape(action_logits, [-1, num_actions])
@@ -92,8 +93,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             tf.float32, [None] + list(observation_space.shape))
 
         # Add other agents actions placeholder for MOA preds
-        # Add 1 to include own action. Note: agent's own actions will always 
-        # form the first column of this tensor.
+        # Add 1 to include own action so it can be conditioned on. Note: agent's 
+        # own actions will always form the first column of this tensor.
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents + 1), name="others_actions")
 
@@ -103,7 +104,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
 
         # Compute output size of model of other agents (MOA)
-        moa_dim = self.num_actions * (self.num_other_agents + 1)
+        self.moa_dim = self.num_actions * self.num_other_agents
         
         # We now create two models, one for the policy, and one for the model
         # of other agents (MOA)
@@ -113,7 +114,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                 "prev_actions": prev_actions,
                 "prev_rewards": prev_rewards,
                 "is_training": self._get_is_training_placeholder(),
-            }, observation_space, self.num_actions, moa_dim, 
+            }, observation_space, self.num_actions, self.moa_dim, 
             self.config["model"], lstm1_name="policy", lstm2_name="moa")
         
         action_dist = dist_class(self.rl_model.outputs)
@@ -141,7 +142,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Setup the MOA loss
         self.moa_preds = self.moa.outputs
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                self.num_actions, self.num_other_agents + 1,
+                                self.num_actions, self.num_other_agents,
                                 loss_weight=self.moa_weight)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
