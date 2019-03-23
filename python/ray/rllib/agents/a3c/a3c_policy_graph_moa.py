@@ -41,7 +41,7 @@ class A3CLoss(object):
 
 class MOALoss(object):
     def __init__(self, action_logits, true_actions, num_actions, 
-                 num_other_agents, loss_weight=1.0):
+                 loss_weight=1.0):
         """Train MOA model with supervised cross entropy loss on a trajectory.
 
         The model is trying to predict others' actions at timestep t+1 given all 
@@ -50,10 +50,6 @@ class MOALoss(object):
         Returns:
             A scalar loss tensor (cross-entropy loss).
         """
-        # Reshape to [B, N, A]
-        action_logits = tf.reshape(action_logits, 
-                                   [-1, num_other_agents, num_actions])
-
         # Remove the prediction for the final step, since t+1 is not known for
         # this step.
         action_logits = action_logits[:-1, :, :]  # [B, N, A]
@@ -136,10 +132,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                             self.config["entropy_coeff"])
 
         # Setup the MOA loss
-        self.moa_preds = self.moa.outputs
+        self.moa_preds = tf.reshape( # Reshape to [B,N,A]
+            self.moa.outputs, [-1, self.num_other_agents, self.num_actions])
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                logit_dim, self.num_other_agents,
-                                loss_weight=self.moa_weight)
+                                logit_dim, loss_weight=self.moa_weight)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
         # Total loss

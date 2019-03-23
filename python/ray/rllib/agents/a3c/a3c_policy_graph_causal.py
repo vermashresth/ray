@@ -19,6 +19,19 @@ from ray.rllib.evaluation.tf_policy_graph import TFPolicyGraph, \
 from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.utils.annotations import override
 
+def kl_divergence(p, q):
+    """Kullback-Leibler divergence D(P || Q) for discrete probability dists
+    
+    Assumes the probability dist is over the last dimension. 
+
+    Taken from: https://gist.github.com/swayson/86c296aa354a555536e6765bbe726ff7
+
+    p, q : array-like, dtype=float
+    """
+    p = np.asarray(p, dtype=np.float)
+    q = np.asarray(q, dtype=np.float)
+
+    return np.sum(np.where(p != 0, p * np.log(p / q), 0), axis=-1)
 
 class A3CLoss(object):
     def __init__(self,
@@ -42,7 +55,7 @@ class A3CLoss(object):
 
 class MOALoss(object):
     def __init__(self, action_logits, true_actions, num_actions, 
-                 num_other_agents, loss_weight=1.0):
+                 loss_weight=1.0):
         """Train MOA model with supervised cross entropy loss on a trajectory.
 
         The model is trying to predict others' actions at timestep t+1 given all 
@@ -51,10 +64,6 @@ class MOALoss(object):
         Returns:
             A scalar loss tensor (cross-entropy loss).
         """
-        # Reshape to [B, N, A]
-        action_logits = tf.reshape(action_logits, 
-                                   [-1, num_other_agents, num_actions])
-
         # Remove the prediction for the final step, since t+1 is not known for
         # this step.
         action_logits = action_logits[:-1, :, :]  # [B, N, A]
@@ -87,6 +96,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.moa_weight = config['model']['custom_options']['moa_weight']
         self.num_counterfactuals = 12 #TODO: replace
         self.influence_reward_clip = 10 #TODO: replace
+        self.influence_divergence_measure = 'kl'
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -140,10 +150,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                             self.config["entropy_coeff"])
 
         # Setup the MOA loss
-        self.moa_preds = self.moa.outputs
+        self.moa_preds = tf.reshape( # Reshape to [B,N,A]
+            self.moa.outputs, [-1, self.num_other_agents, self.num_actions])
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                self.num_actions, self.num_other_agents,
-                                loss_weight=self.moa_weight)
+                                self.num_actions, loss_weight=self.moa_weight)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
         # Total loss
@@ -360,40 +370,33 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         do KL between marginal and real policy
         add that as influence to rewards in my sample_batch
         """
-        # Remove own actions from other agents' actions
+        # Predict the next action for all other agents. Shape is [B, N, A]
         true_logits, true_probs = self.predict_others_next_action(trajectory)
 
         counterfactual_actions = self.sample_counterfactuals(trajectory)
         
         (marginal_logits, 
          marginal_probs) = self.use_counterfactuals_to_marginalize_predictions(
-            trajectory, counterfactual_actions)
+            trajectory, counterfactual_actions)  # [B, N, A]
 
-        # Remove own action from preds
-        true_logits = self.format_action_preds(true_logits)
-        true_probs = self.reshape_action_preds_remove_self(true_probs)
-        marginal_logits = self.reshape_action_preds_remove_self(marginal_logits)
-        marginal_probs = self.reshape_action_preds_remove_self(marginal_probs)
-
-        # Reshape to [B * N, A]
-
-        if self.policy_comparison_func == 'kl':
-            influence = kl_divergence(true_logits, marginal_logits)
+        if self.influence_divergence_measure == 'kl':
+            # [B, N]
+            influence_per_agent = kl_divergence(true_probs, marginal_probs) 
+        # TODO(natashajaques): more policy comparison functions here. Consider
+        # Wasserstein distance, for example.
+        
+        influence = np.sum(influence_per_agent, axis=-1)
 
         # Clip influence reward
-        influence = tf.clip_by_value(influence, -self.influence_reward_clip,
-                                     self.influence_reward_clip)
+        influence = np.clip(influence, -self.influence_reward_clip, 
+                            self.influence_reward_clip)
 
-        #influence = tf.reshape(influence, [trajectory_len, self._num_other_agents])
+        # TODO: Zero out influence reward for steps where the other agent isn't visible.
 
-        # Zero out influence reward for steps where the other agent isn't visible.
+        import pdb; pdb.set_trace()
+        trajetory['rewards']
+
         return trajectory
-
-    def reshape_action_preds_remove_self(self, logits):
-        preds = np.reshape(
-            preds, [-1, self.num_other_agents + 1, self.num_actions])
-        # Chop off predictions about self's own actions, can't influence self.
-        return preds[:,1:,:]
 
     def sample_counterfactuals(self, trajectory):
         action_probs = self.get_action_probabilities(trajectory)
@@ -425,6 +428,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         marginal_preds = np.sum(counter_preds, axis=0)
         marginal_probs = np.sum(counter_probs, axis=0)
+
+        # Renormalize probs to ensure probability
 
         return marginal_preds, marginal_probs
 
