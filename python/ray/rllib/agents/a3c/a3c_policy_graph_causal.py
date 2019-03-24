@@ -94,11 +94,16 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.num_other_agents = config['num_other_agents']
         self.agent_id = config['agent_id']
 
+        # Extract influence options
         cust_opts = config['model']['custom_options']
         self.moa_weight = cust_opts['moa_weight']
         self.influence_reward_clip = cust_opts['influence_reward_clip']
         self.influence_divergence_measure = cust_opts['influence_divergence_measure']
         self.influence_reward_weight = cust_opts['influence_reward_weight']
+        self.influence_curriculum_steps = cust_opts['influence_curriculum_steps']
+
+        # Use to compute increasing influence curriculum weight
+        self.steps_processed = 0
 
         # Setup the policy
         self.observations = tf.placeholder(
@@ -281,14 +286,6 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             (args, self.rl_model.state_in)
         for k, v in zip(self.rl_model.state_in, args):
             feed_dict[k] = v
-        
-        # Debugging
-        # for k in feed_dict.keys():
-        #     if type(feed_dict[k]) == list:
-        #         print(k, len(feed_dict[k]))
-        #     else:
-        #         print(k, feed_dict[k].shape)
-        
         vf = self.sess.run(self.vf, feed_dict)
         return vf[0]
 
@@ -381,18 +378,27 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             influence_per_agent = kl_div(true_probs, marginal_probs)  # [B, N]
         # TODO(natashamjaques): more policy comparison functions here.
         
-        influence = np.sum(influence_per_agent, axis=-1)
+        # Track steps processed for influence curriculum
+        self.steps_processed += len(trajectory['obs'])
 
-        # Clip influence reward
+        # Summarize and clip influence reward
+        influence = np.sum(influence_per_agent, axis=-1)
         influence = np.clip(influence, -self.influence_reward_clip, 
                             self.influence_reward_clip)
 
         # TODO: Zero out influence reward for steps where the other agent isn't visible.
 
-        trajectory['rewards'] = trajectory['rewards'] + \
-            (influence * self.influence_reward_weight)
+        # Add to trajectory
+        inf_weight = self.current_influence_curriculum_weight()
+        trajectory['rewards'] = trajectory['rewards'] + (influence * inf_weight)
 
         return trajectory
+
+    def current_influence_curriculum_weight(self):
+        if self.steps_processed > self.influence_curriculum_steps:
+            return self.influence_reward_weight
+        percent = float(self.steps_processed) / self.influence_curriculum_steps
+        return percent * self.influence_reward_weight
 
     def marginalize_predictions_over_own_actions(self, trajectory):
         # Run policy to get probability of each action in original trajectory
