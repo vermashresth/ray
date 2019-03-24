@@ -19,6 +19,7 @@ from ray.rllib.evaluation.tf_policy_graph import TFPolicyGraph, \
 from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.utils.annotations import override
 
+
 def kl_div(p, q):
     """Kullback-Leibler divergence D(P || Q) for discrete probability dists
     
@@ -32,6 +33,7 @@ def kl_div(p, q):
     q = np.asarray(q, dtype=np.float)
 
     return np.sum(np.where(p != 0, p * np.log(p / q), 0), axis=-1)
+
 
 class A3CLoss(object):
     def __init__(self,
@@ -373,23 +375,33 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
          marginal_probs) = self.marginalize_predictions_over_own_actions(
              trajectory)  # [B, N, A]
 
-        # Compute influence using different divergence metrics
+        # Compute influence per agent/step ([B, N]) using different metrics
         if self.influence_divergence_measure == 'kl':
-            influence_per_agent = kl_div(true_probs, marginal_probs)  # [B, N]
+            influence_per_agent_step = kl_div(true_probs, marginal_probs)
+        elif self.influence_divergence_measure == 'jsd':
+            mean_probs = 0.5 * (true_probs + marginal_probs)
+            influence_per_agent_step = (0.5 * kl_div(true_probs, mean_probs) +
+                                   0.5 * kl_div(marginal_probs, mean_probs))
         # TODO(natashamjaques): more policy comparison functions here.
-        
-        # Track steps processed for influence curriculum
-        self.steps_processed += len(trajectory['obs'])
+
+        # Logging influence metrics
+        influence_per_agent = np.sum(influence_per_agent_step, axis=0)
+        total_influence = np.sum(influence_per_agent_step)
+        # TODO(eugenevinitsky): Can we log influnce per agent over time?
 
         # Summarize and clip influence reward
-        influence = np.sum(influence_per_agent, axis=-1)
+        influence = np.sum(influence_per_agent_step, axis=-1)
         influence = np.clip(influence, -self.influence_reward_clip, 
                             self.influence_reward_clip)
 
-        # TODO: Zero out influence reward for steps where the other agent isn't visible.
+        # TODO: Zero out influence reward for steps where the other agent isn't
+        # visible.
+
+        # Get influence curriculum weight
+        self.steps_processed += len(trajectory['obs'])
+        inf_weight = self.current_influence_curriculum_weight()
 
         # Add to trajectory
-        inf_weight = self.current_influence_curriculum_weight()
         trajectory['rewards'] = trajectory['rewards'] + (influence * inf_weight)
 
         return trajectory
