@@ -35,6 +35,15 @@ def kl_div(p, q):
     return np.sum(np.where(p != 0, p * np.log(p / q), 0), axis=-1)
 
 
+def agent_name_to_idx(name, self_id):
+    agent_num = int(name[6])
+    self_num = int(self_id[6])
+    if agent_num > self_num:
+        return agent_num - 1
+    else:
+        return agent_num
+
+
 class A3CLoss(object):
     def __init__(self,
                  action_dist,
@@ -99,10 +108,12 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Extract influence options
         cust_opts = config['model']['custom_options']
         self.moa_weight = cust_opts['moa_weight']
+        self.train_moa_only_when_visible = cust_opts['train_moa_only_when_visible']
         self.influence_reward_clip = cust_opts['influence_reward_clip']
         self.influence_divergence_measure = cust_opts['influence_divergence_measure']
         self.influence_reward_weight = cust_opts['influence_reward_weight']
         self.influence_curriculum_steps = cust_opts['influence_curriculum_steps']
+        self.influence_only_when_visible = cust_opts['influence_only_when_visible']
 
         # Use to compute increasing influence curriculum weight
         self.steps_processed = 0
@@ -384,6 +395,11 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                                    0.5 * kl_div(marginal_probs, mean_probs))
         # TODO(natashamjaques): more policy comparison functions here.
 
+        # Zero out influence for steps where the other agent isn't visible.
+        if self.influence_only_when_visible:
+            visibility = self.get_agent_visibility_multiplier(trajectory)
+            influence_per_agent_step *= visibility
+
         # Logging influence metrics
         influence_per_agent = np.sum(influence_per_agent_step, axis=0)
         total_influence = np.sum(influence_per_agent_step)
@@ -394,9 +410,6 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         influence = np.clip(influence, -self.influence_reward_clip, 
                             self.influence_reward_clip)
 
-        # TODO: Zero out influence reward for steps where the other agent isn't
-        # visible.
-
         # Get influence curriculum weight
         self.steps_processed += len(trajectory['obs'])
         inf_weight = self.current_influence_curriculum_weight()
@@ -405,6 +418,15 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         trajectory['rewards'] = trajectory['rewards'] + (influence * inf_weight)
 
         return trajectory
+
+    def get_agent_visibility_multiplier(self, trajectory):
+        traj_len = len(trajectory['infos'])
+        visibility = np.zeros((traj_len, self.num_other_agents))
+        vis_lists = [info['visible_agents'] for info in trajectory['infos']]
+        for i, v in enumerate(vis_lists):
+            vis_agents = [agent_name_to_idx(a, self.agent_id) for a in v]
+            visibility[i, vis_agents] = 1
+        return visibility
 
     def current_influence_curriculum_weight(self):
         if self.steps_processed > self.influence_curriculum_steps:
