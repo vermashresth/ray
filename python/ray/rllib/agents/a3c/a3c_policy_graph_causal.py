@@ -66,7 +66,7 @@ class A3CLoss(object):
 
 class MOALoss(object):
     def __init__(self, action_logits, true_actions, num_actions, 
-                 loss_weight=1.0):
+                 loss_weight=1.0, others_visibility=None):
         """Train MOA model with supervised cross entropy loss on a trajectory.
 
         The model is trying to predict others' actions at timestep t+1 given all 
@@ -88,11 +88,15 @@ class MOALoss(object):
         flat_labels = tf.reshape(true_actions, [-1])
         self.ce_per_entry = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=flat_labels, logits=flat_logits)
+
+        # Zero out the loss if the other agent isn't visible to this one.
+        if others_visibility is not None:
+            # Remove first entry in ground truth visibility and flatten
+            others_visibility = tf.reshape(others_visibility[1:,:], [-1])
+            self.ce_per_entry *= tf.cast(others_visibility, tf.float32)
+
         self.total_loss = tf.reduce_mean(self.ce_per_entry)
         tf.Print(self.total_loss, [self.total_loss], message="MOA CE loss")
-        
-        #TODO(natashajaques): Add something to train only when other agents are
-        # visible here
 
 
 class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
@@ -127,6 +131,14 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # own actions will always form the first column of this tensor.
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents + 1), name="others_actions")
+        
+        # 0/1 multiplier array representing whether each agent is visible to
+        # the current agent.
+        if self.train_moa_only_when_visible:
+            self.others_visibility = tf.placeholder(tf.int32,
+                shape=(None, self.num_other_agents), name="others_visibility")
+        else:
+            self.others_visibility = None
 
         dist_class, self.num_actions = ModelCatalog.get_action_dist(
             action_space, self.config["model"])
@@ -173,7 +185,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.moa_preds = tf.reshape( # Reshape to [B,N,A]
             self.moa.outputs, [-1, self.num_other_agents, self.num_actions])
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                self.num_actions, loss_weight=self.moa_weight)
+                                self.num_actions, loss_weight=self.moa_weight,
+                                others_visibility=self.others_visibility)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
         # Total loss
@@ -189,6 +202,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             ("advantages", advantages),
             ("value_targets", self.v_target),
         ]
+        if self.train_moa_only_when_visible:
+            loss_in.append(('others_visibility', self.others_visibility))
         LearningRateSchedule.__init__(self, self.config["lr"],
                                       self.config["lr_schedule"])
         TFPolicyGraph.__init__(
@@ -354,6 +369,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             other_agent_batches, own_actions=own_actions, batch_type=True)
         sample_batch['others_actions'] = all_actions
 
+        if self.train_moa_only_when_visible:
+            sample_batch['others_visibility'] = \
+                self.get_agent_visibility_multiplier(sample_batch)
+
         # Compute causal social influence reward and add to batch.
         sample_batch = self.compute_influence_reward(sample_batch)
 
@@ -397,7 +416,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         # Zero out influence for steps where the other agent isn't visible.
         if self.influence_only_when_visible:
-            visibility = self.get_agent_visibility_multiplier(trajectory)
+            if 'others_visibility' in trajectory.keys():
+                visibility = trajectory['others_visibility']
+            else:
+                visibility = self.get_agent_visibility_multiplier(trajectory)
             influence_per_agent_step *= visibility
 
         # Logging influence metrics
