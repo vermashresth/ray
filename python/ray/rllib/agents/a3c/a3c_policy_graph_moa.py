@@ -19,6 +19,15 @@ from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.utils.annotations import override
 
 
+def agent_name_to_idx(name, self_id):
+    agent_num = int(name[6])
+    self_num = int(self_id[6])
+    if agent_num > self_num:
+        return agent_num - 1
+    else:
+        return agent_num
+
+
 class A3CLoss(object):
     def __init__(self,
                  action_dist,
@@ -41,7 +50,7 @@ class A3CLoss(object):
 
 class MOALoss(object):
     def __init__(self, action_logits, true_actions, num_actions, 
-                 loss_weight=1.0):
+                 loss_weight=1.0, others_visibility=None):
         """Train MOA model with supervised cross entropy loss on a trajectory.
 
         The model is trying to predict others' actions at timestep t+1 given all 
@@ -63,11 +72,15 @@ class MOALoss(object):
         flat_labels = tf.reshape(true_actions, [-1])
         self.ce_per_entry = tf.nn.sparse_softmax_cross_entropy_with_logits(
             labels=flat_labels, logits=flat_logits)
+
+        # Zero out the loss if the other agent isn't visible to this one.
+        if others_visibility is not None:
+            # Remove first entry in ground truth visibility and flatten
+            others_visibility = tf.reshape(others_visibility[1:,:], [-1])
+            self.ce_per_entry *= tf.cast(others_visibility, tf.float32)
+
         self.total_loss = tf.reduce_mean(self.ce_per_entry)
         tf.Print(self.total_loss, [self.total_loss], message="MOA CE loss")
-        
-        #TODO(natashajaques): Add something to train only when other agents are
-        # visible here
 
 
 class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
@@ -80,24 +93,34 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.num_other_agents = config['num_other_agents']
         self.agent_id = config['agent_id']
         self.moa_weight = config['model']['custom_options']['moa_weight']
+        self.train_moa_only_when_visible = \
+            config['model']['custom_options']['train_moa_only_when_visible']
 
         # Setup the policy
         self.observations = tf.placeholder(
             tf.float32, [None] + list(observation_space.shape))
 
         # Add other agents actions placeholder for MOA preds
-        # Add 1 to include own action so it can be conditioned on. Note: agent's 
+        # Add 1 to include own action so it can be conditioned on. Note: agent's
         # own actions will always form the first column of this tensor.
         self.others_actions = tf.placeholder(tf.int32, 
             shape=(None, self.num_other_agents + 1), name="others_actions")
 
-        dist_class, logit_dim = ModelCatalog.get_action_dist(
+        # 0/1 multiplier array representing whether each agent is visible to
+        # the current agent.
+        if self.train_moa_only_when_visible:
+            self.others_visibility = tf.placeholder(tf.int32,
+                shape=(None, self.num_other_agents), name="others_visibility")
+        else:
+            self.others_visibility = None
+
+        dist_class, self.num_actions = ModelCatalog.get_action_dist(
             action_space, self.config["model"])
         prev_actions = ModelCatalog.get_action_placeholder(action_space)
         prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
 
         # Compute output size of model of other agents (MOA)
-        self.moa_dim = logit_dim * self.num_other_agents
+        self.moa_dim = self.num_actions * self.num_other_agents
         
         # We now create two models, one for the policy, and one for the model
         # of other agents (MOA)
@@ -107,8 +130,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                 "prev_actions": prev_actions,
                 "prev_rewards": prev_rewards,
                 "is_training": self._get_is_training_placeholder(),
-            }, observation_space, logit_dim, self.moa_dim, self.config["model"], 
-            lstm1_name="policy", lstm2_name="moa")
+            }, observation_space, self.num_actions, self.moa_dim, 
+            self.config["model"], lstm1_name="policy", lstm2_name="moa")
         
         action_dist = dist_class(self.rl_model.outputs)
         self.vf = self.rl_model.value_function()
@@ -135,7 +158,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.moa_preds = tf.reshape( # Reshape to [B,N,A]
             self.moa.outputs, [-1, self.num_other_agents, self.num_actions])
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions, 
-                                logit_dim, loss_weight=self.moa_weight)
+                                self.num_actions, loss_weight=self.moa_weight,
+                                others_visibility=self.others_visibility)
         self.moa_action_probs = tf.nn.softmax(self.moa_preds)
 
         # Total loss
@@ -151,6 +175,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             ("advantages", advantages),
             ("value_targets", self.v_target),
         ]
+        if self.train_moa_only_when_visible:
+            loss_in.append(('others_visibility', self.others_visibility))
         LearningRateSchedule.__init__(self, self.config["lr"],
                                       self.config["lr_schedule"])
         TFPolicyGraph.__init__(
@@ -200,6 +226,10 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             other_agent_batches, own_actions=own_actions, batch_type=True)
         sample_batch['others_actions'] = all_actions
 
+        if self.train_moa_only_when_visible:
+            sample_batch['others_visibility'] = \
+                self.get_agent_visibility_multiplier(sample_batch)
+
         completed = sample_batch["dones"][-1]
         if completed:
             last_r = 0.0
@@ -217,6 +247,15 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         sample_batch = compute_advantages(sample_batch, last_r, self.config["gamma"],
                                           self.config["lambda"])
         return sample_batch
+
+    def get_agent_visibility_multiplier(self, trajectory):
+        traj_len = len(trajectory['infos'])
+        visibility = np.zeros((traj_len, self.num_other_agents))
+        vis_lists = [info['visible_agents'] for info in trajectory['infos']]
+        for i, v in enumerate(vis_lists):
+            vis_agents = [agent_name_to_idx(a, self.agent_id) for a in v]
+            visibility[i, vis_agents] = 1
+        return visibility
 
     def extract_last_actions_from_episodes(self, episodes, batch_type=False, 
                                            own_actions=None):
