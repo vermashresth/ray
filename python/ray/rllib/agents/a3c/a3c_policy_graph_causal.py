@@ -224,6 +224,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             seq_lens=self.rl_model.seq_lens,
             max_seq_len=self.config["model"]["max_seq_len"])
 
+        self.total_influence = tf.get_variable("total_influence", initializer=tf.constant(0.0))
+
         self.stats = {
             "cur_lr": tf.cast(self.cur_lr, tf.float64),
             "policy_loss": self.rl_loss.pi_loss,
@@ -232,7 +234,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             "var_gnorm": tf.global_norm(self.var_list),
             "vf_loss": self.rl_loss.vf_loss,
             "vf_explained_var": explained_variance(self.v_target, self.vf),
-            "moa_loss": self.moa_loss.total_loss
+            "moa_loss": self.moa_loss.total_loss,
+            "total_influence": self.total_influence
         }
 
         self.sess.run(tf.global_variables_initializer())
@@ -425,7 +428,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Logging influence metrics
         influence_per_agent = np.sum(influence_per_agent_step, axis=0)
         total_influence = np.sum(influence_per_agent_step)
-        # TODO(eugenevinitsky): Can we log influnce per agent over time?
+        self.total_influence.load(total_influence, session=self.sess)
+        self.influence_per_agent = influence_per_agent
 
         # Summarize and clip influence reward
         influence = np.sum(influence_per_agent_step, axis=-1)
