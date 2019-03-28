@@ -464,6 +464,9 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Run policy to get probability of each action in original trajectory
         action_probs = self.get_action_probabilities(trajectory)
 
+        # Normalize to reduce numerical inaccuracies
+        action_probs = action_probs / action_probs.sum(axis=1, keepdims=1)
+
         others_actions = trajectory['others_actions'][:,1:]
         traj = copy.deepcopy(trajectory)
         traj_len = len(trajectory['obs'])
@@ -491,6 +494,9 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             tiled_probs, [traj_len, self.num_other_agents, self.num_actions])
         marginal_preds = np.multiply(marginal_preds, tiled_probs)
         marginal_probs = np.multiply(marginal_probs, tiled_probs)
+
+        # Normalize to reduce numerical inaccuracies
+        marginal_probs = marginal_probs / marginal_probs.sum(axis=2, keepdims=1)
 
         return marginal_preds, marginal_probs
 
