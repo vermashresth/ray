@@ -19,6 +19,15 @@ from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.utils.annotations import override
 
 
+def agent_name_to_idx(name, self_id):
+    agent_num = int(name[6])
+    self_num = int(self_id[6])
+    if agent_num > self_num:
+        return agent_num - 1
+    else:
+        return agent_num
+
+
 class A3CLoss(object):
     def __init__(self,
                  action_dist,
@@ -183,7 +192,15 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             print("Why are there no episodes?")
             import pdb; pdb.set_trace()
 
-        import pdb; pdb.set_trace()
+        if type(episodes) == dict and 'all_agents_actions' in episodes.keys():
+            if exclude_self:
+                self_index = agent_name_to_idx(self.agent_id)
+                others_actions = [e for i, e in enumerate(
+                    episodes['all_agents_actions']) if self_index != i]
+                return np.reshape(np.array(others_actions, [1,-1])
+            else:
+                return np.reshape(
+                    np.array(episodes['all_agents_actions']), [1,-1])
         
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
