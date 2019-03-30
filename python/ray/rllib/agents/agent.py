@@ -394,6 +394,10 @@ class Agent(Trainable):
             info (dict): info object, if any
             policy_id (str): policy to query (only applies to multi-agent).
         """
+        episode = None
+        if 'all_agent_actions' in info.keys():
+            episode = info
+        import pbd; pdb.set_trace()
 
         if state is None:
             state = []
@@ -403,9 +407,11 @@ class Agent(Trainable):
             preprocessed, update=False)
         if state:
             return self.get_policy(policy_id).compute_single_action(
-                filtered_obs, state, prev_action, prev_reward, info)
+                filtered_obs, state, prev_action, prev_reward, info, 
+                episode=episode)
         return self.get_policy(policy_id).compute_single_action(
-            filtered_obs, state, prev_action, prev_reward, info)[0]
+            filtered_obs, state, prev_action, prev_reward, info, 
+            episode=episode)[0]
 
     @property
     def iteration(self):
