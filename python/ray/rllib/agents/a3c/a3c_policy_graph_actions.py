@@ -192,6 +192,7 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             print("Why are there no episodes?")
             import pdb; pdb.set_trace()
 
+        import pdb; pdb.set_trace()
         if type(episodes) == dict and 'all_agents_actions' in episodes.keys():
             if exclude_self:
                 self_index = agent_name_to_idx(self.agent_id)
