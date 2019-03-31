@@ -101,8 +101,6 @@ class PolicyGraph(object):
             info (dict): dictionary of extra features, if any
         """
 
-        import pdb; pdb.set_trace()
-
         prev_action_batch = None
         prev_reward_batch = None
         info_batch = None

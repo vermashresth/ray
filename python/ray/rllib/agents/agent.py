@@ -397,7 +397,6 @@ class Agent(Trainable):
         episode = None
         if 'all_agent_actions' in info.keys():
             episode = info
-        import pdb; pdb.set_trace()
 
         if state is None:
             state = []
