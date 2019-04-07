@@ -19,13 +19,15 @@ from ray.rllib.models.catalog import ModelCatalog
 from ray.rllib.utils.annotations import override
 
 
-def agent_name_to_idx(name, self_id):
+def agent_name_to_idx(name):
+    # TODO(nj) what was this supposed to do?
     agent_num = int(name[6])
-    self_num = int(self_id[6])
-    if agent_num > self_num:
-        return agent_num - 1
-    else:
-        return agent_num
+    return agent_num
+    # self_num = int(self_id[6])
+    # if agent_num > self_num:
+    #     return agent_num - 1
+    # else:
+    #     return agent_num
 
 
 class A3CLoss(object):
@@ -69,13 +71,13 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         dist_class, logit_dim = ModelCatalog.get_action_dist(
             action_space, self.config["model"])
-        prev_actions = ModelCatalog.get_action_placeholder(action_space)
-        prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
+        self.prev_actions = ModelCatalog.get_action_placeholder(action_space)
+        self.prev_rewards = tf.placeholder(tf.float32, [None], name="prev_reward")
         self.model = ModelCatalog.get_model({
             "obs": self.observations,
             "others_actions": self.others_actions,
-            "prev_actions": prev_actions,
-            "prev_rewards": prev_rewards,
+            "prev_actions": self.prev_actions,
+            "prev_rewards": self.prev_rewards,
             "is_training": self._get_is_training_placeholder(),
         }, observation_space, logit_dim, self.config["model"])
         action_dist = dist_class(self.model.outputs)
@@ -104,8 +106,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             ("obs", self.observations),
             ("others_actions", self.others_actions),
             ("actions", actions),
-            ("prev_actions", prev_actions),
-            ("prev_rewards", prev_rewards),
+            ("prev_actions", self.prev_actions),
+            ("prev_rewards", self.prev_rewards),
             ("advantages", advantages),
             ("value_targets", self.v_target),
         ]
@@ -124,8 +126,8 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             loss_inputs=loss_in,
             state_inputs=self.model.state_in,
             state_outputs=self.model.state_out,
-            prev_action_input=prev_actions,
-            prev_reward_input=prev_rewards,
+            prev_action_input=self.prev_actions,
+            prev_reward_input=self.prev_rewards,
             seq_lens=self.model.seq_lens,
             max_seq_len=self.config["model"]["max_seq_len"])
 
@@ -192,16 +194,20 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             print("Why are there no episodes?")
             import pdb; pdb.set_trace()
 
+        # FIXME(ev) does this work normally?
+        # This is a hack to make replay work I think?
         if type(episodes) == dict and 'all_agents_actions' in episodes.keys():
             if exclude_self:
                 self_index = agent_name_to_idx(self.agent_id)
                 others_actions = [e for i, e in enumerate(
                     episodes['all_agents_actions']) if self_index != i]
-                return np.reshape(np.array(others_actions, [1,-1]))
+                return np.reshape(np.array(others_actions), [1,-1])
+
             else:
+                # FIXME(ev) put back the uncommented line
                 return np.reshape(
                     np.array(episodes['all_agents_actions']), [1,-1])
-        
+
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
         agent_ids = sorted(episodes.keys())

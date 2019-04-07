@@ -176,9 +176,10 @@ class TFPolicyGraph(PolicyGraph):
                         episodes=None,
                         **kwargs):
         builder = TFRunBuilder(self._sess, "compute_actions")
+        # FIXME(ev) does passing the zeroth element here work as desired?
         fetches = self._build_compute_actions(builder, obs_batch,
                                               state_batches, prev_action_batch,
-                                              prev_reward_batch)
+                                              prev_reward_batch, episodes=episodes[0])
         return builder.get(fetches)
 
     @override(PolicyGraph)

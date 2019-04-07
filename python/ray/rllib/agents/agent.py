@@ -395,7 +395,7 @@ class Agent(Trainable):
             policy_id (str): policy to query (only applies to multi-agent).
         """
         episode = None
-        if 'all_agent_actions' in info.keys():
+        if 'all_agents_actions' in info.keys():
             episode = info
 
         if state is None:
