@@ -195,7 +195,6 @@ class A3CPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             import pdb; pdb.set_trace()
 
         # FIXME(ev) does this work normally?
-        # This is a hack to make replay work I think?
         if type(episodes) == dict and 'all_agents_actions' in episodes.keys():
             if exclude_self:
                 self_index = agent_name_to_idx(self.agent_id)
