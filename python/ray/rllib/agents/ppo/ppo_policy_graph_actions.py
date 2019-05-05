@@ -321,7 +321,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         return batch
 
     def extract_last_actions_from_episodes(self, episodes, batch_type=False,
-                                           exclude_self=True):
+                                           own_actions=None):
         """Pulls every other agent's previous actions out of structured data.
         Args:
             episodes: the structured data type. Typically a dict of episode
@@ -329,8 +329,8 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             batch_type: if True, the structured data is a dict of tuples,
                 where the second tuple element is the relevant dict containing
                 previous actions.
-            exclude_self: If True, will not include the agent's own actions in
-                the returned array.
+            own_actions: an array of the agents own actions. If provided, will
+                be the first column of the created action matrix.
         Returns: a real valued array of size [batch, num_other_agents] (meaning
             each agents' actions goes down one column, each row is a timestep)
         """
@@ -339,25 +339,13 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             import pdb;
             pdb.set_trace()
 
-        # FIXME(ev) does this work normally?
-        if type(episodes) == dict and 'all_agents_actions' in episodes.keys():
-            if exclude_self:
-                others_actions = [e for i, e in enumerate(
-                    episodes['all_agents_actions']) if self.agent_id != i]
-                return np.reshape(np.array(others_actions), [1, -1])
-
-            else:
-                # FIXME(ev) put back the uncommented line
-                return np.reshape(
-                    np.array(episodes['all_agents_actions']), [1, -1])
-
         # Need to sort agent IDs so same agent is consistently in
         # same part of input space.
         agent_ids = sorted(episodes.keys())
         prev_actions = []
 
         for agent_id in agent_ids:
-            if exclude_self and agent_id == self.agent_id:
+            if agent_id == self.agent_id:
                 continue
             if batch_type:
                 prev_actions.append(episodes[agent_id][1]['actions'])
@@ -366,7 +354,13 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                     [e.prev_action for e in episodes[agent_id]])
 
         # Need a transpose to make a [batch_size, num_other_agents] tensor
-        return np.transpose(np.array(prev_actions))
+        all_actions = np.transpose(np.array(prev_actions))
+
+        # Attach agents own actions as column 1
+        if own_actions is not None:
+            all_actions = np.hstack((own_actions, all_actions))
+
+        return all_actions
 
     @override(TFPolicyGraph)
     def _build_compute_actions(self,
