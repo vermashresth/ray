@@ -196,7 +196,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             else:
                 obs_ph, value_targets_ph, adv_ph, act_ph, \
                 logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph, \
-                others_action_ph, others_visibility_ph  = existing_inputs[:10]
+                others_action_ph, others_visibility_ph = existing_inputs[:10]
                 existing_state_in = existing_inputs[10:-1]
                 existing_seq_lens = existing_inputs[-1]
         else:
@@ -236,7 +236,6 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.prev_actions = prev_actions_ph
         self.prev_rewards = prev_rewards_ph
         self.others_actions = others_action_ph
-        self.others_visibility = others_visibility_ph
 
         self.loss_in = [
             ("obs", obs_ph),
@@ -250,7 +249,10 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             ("others_actions", others_action_ph),
         ]
         if self.train_moa_only_when_visible:
+            self.others_visibility = others_visibility_ph
             self.loss_in.append(('others_visibility', self.others_visibility))
+        else:
+            self.others_visibility = None
 
         self.model = ModelCatalog.get_model(
             {
