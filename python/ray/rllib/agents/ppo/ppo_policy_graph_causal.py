@@ -270,7 +270,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             state_in=existing_state_in,
             seq_lens=existing_seq_lens)
         # Compute output size of model of other agents (MOA)
-        self.num_actions = logit_dim * self.num_other_agents
+        self.num_actions = logit_dim
         self.moa_dim = logit_dim * self.num_other_agents
         self.moa = self.model.moa_model({
                 "obs": obs_ph,
