@@ -531,7 +531,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         marginal_probs = np.sum(counter_probs, axis=0)
 
         # Multiply by probability of each action to renormalize probability
-        tiled_probs = np.tile(action_probs, 4),
+        tiled_probs = np.tile(action_probs, self.num_other_agents),
         tiled_probs = np.reshape(
             tiled_probs, [traj_len, self.num_other_agents, self.num_actions])
         marginal_preds = np.multiply(marginal_preds, tiled_probs)
