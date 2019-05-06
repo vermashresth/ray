@@ -220,7 +220,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                 tf.float32, [None], name="prev_reward")
             # Add other agents actions placeholder
             others_action_ph = tf.placeholder(tf.int32,
-                                                 shape=(None, self.num_other_agents),
+                                                 shape=(None, self.num_other_agents + 1),
                                                  name="others_actions")
             # 0/1 multiplier array representing whether each agent is visible to
             # the current agent.

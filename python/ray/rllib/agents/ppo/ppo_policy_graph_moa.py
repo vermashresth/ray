@@ -165,15 +165,14 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         if existing_inputs:
             if not self.train_moa_only_when_visible:
-                obs_ph, value_targets_ph, adv_ph, act_ph, \
-                    logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph, \
-                    others_action_ph = existing_inputs[:9]
+                obs_ph, others_action_ph, value_targets_ph, adv_ph, act_ph, \
+                    logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph \
+                     = existing_inputs[:9]
                 existing_state_in = existing_inputs[9:-1]
                 existing_seq_lens = existing_inputs[-1]
             else:
-                obs_ph, value_targets_ph, adv_ph, act_ph, \
-                logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph, \
-                others_action_ph, others_visibility_ph  = existing_inputs[:10]
+                obs_ph, others_action_ph, others_visibility_ph, value_targets_ph, adv_ph, act_ph, \
+                logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph = existing_inputs[:10]
                 existing_state_in = existing_inputs[10:-1]
                 existing_seq_lens = existing_inputs[-1]
         else:
@@ -198,7 +197,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
                 tf.float32, [None], name="prev_reward")
             # Add other agents actions placeholder
             others_action_ph = tf.placeholder(tf.int32,
-                                                 shape=(None, self.num_other_agents),
+                                                 shape=(None, self.num_other_agents + 1),
                                                  name="others_actions")
             # 0/1 multiplier array representing whether each agent is visible to
             # the current agent.
@@ -217,6 +216,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         self.loss_in = [
             ("obs", obs_ph),
+            ("others_actions", others_action_ph),
             ("value_targets", value_targets_ph),
             ("advantages", adv_ph),
             ("actions", act_ph),
@@ -224,10 +224,9 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             ("vf_preds", vf_preds_ph),
             ("prev_actions", prev_actions_ph),
             ("prev_rewards", prev_rewards_ph),
-            ("others_actions", others_action_ph),
         ]
         if self.train_moa_only_when_visible:
-            self.loss_in.append(('others_visibility', self.others_visibility))
+            self.loss_in.insert(2, ('others_visibility', self.others_visibility))
 
         self.model = ModelCatalog.get_model(
             {
