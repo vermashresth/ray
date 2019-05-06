@@ -30,8 +30,12 @@ def kl_div(p, q):
     """
     p = np.asarray(p, dtype=np.float)
     q = np.asarray(q, dtype=np.float)
+    mask = np.where(q == 0)
+    # now we renormalize
+    p[mask] = 0
+    p = p / p.sum(axis=2, keepdims=1)
 
-    return np.sum(np.where(p != 0, p * np.log(p / q), 0), axis=-1)
+    return np.sum(np.where((p != 0) & (q != 0), p * np.log(p / q), 0), axis=-1)
 
 class MOALoss(object):
     def __init__(self, action_logits, true_actions, num_actions,
@@ -64,7 +68,7 @@ class MOALoss(object):
             others_visibility = tf.reshape(others_visibility[1:,:], [-1])
             self.ce_per_entry *= tf.cast(others_visibility, tf.float32)
 
-        self.total_loss = tf.reduce_mean(self.ce_per_entry)
+        self.total_loss = tf.reduce_mean(self.ce_per_entry) * loss_weight
         tf.Print(self.total_loss, [self.total_loss], message="MOA CE loss")
 
 class PPOLoss(object):

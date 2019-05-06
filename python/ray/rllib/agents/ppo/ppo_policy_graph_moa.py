@@ -48,7 +48,7 @@ class MOALoss(object):
             others_visibility = tf.reshape(others_visibility[1:,:], [-1])
             self.ce_per_entry *= tf.cast(others_visibility, tf.float32)
 
-        self.total_loss = tf.reduce_mean(self.ce_per_entry)
+        self.total_loss = tf.reduce_mean(self.ce_per_entry) * loss_weight
         tf.Print(self.total_loss, [self.total_loss], message="MOA CE loss")
 
 class PPOLoss(object):
