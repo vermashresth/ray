@@ -124,9 +124,8 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             action_space, self.config["model"])
 
         if existing_inputs:
-            obs_ph, value_targets_ph, adv_ph, act_ph, \
-                logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph, \
-                others_action_ph = existing_inputs[:9]
+            obs_ph, others_action_ph, value_targets_ph, adv_ph, act_ph, \
+                logits_ph, vf_preds_ph, prev_actions_ph, prev_rewards_ph = existing_inputs[:9]
             existing_state_in = existing_inputs[9:-1]
             existing_seq_lens = existing_inputs[-1]
         else:
@@ -162,6 +161,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
 
         self.loss_in = [
             ("obs", obs_ph),
+            ("others_actions", others_action_ph),
             ("value_targets", value_targets_ph),
             ("advantages", adv_ph),
             ("actions", act_ph),
@@ -169,7 +169,6 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             ("vf_preds", vf_preds_ph),
             ("prev_actions", prev_actions_ph),
             ("prev_rewards", prev_rewards_ph),
-            ("others_actions", others_action_ph),
         ]
         self.model = ModelCatalog.get_model(
             {
