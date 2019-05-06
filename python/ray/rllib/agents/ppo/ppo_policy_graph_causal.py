@@ -236,7 +236,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         self.prev_actions = prev_actions_ph
         self.prev_rewards = prev_rewards_ph
         self.others_actions = others_action_ph
-        self.others_visible = others_visibility_ph
+        self.others_visibility = others_visibility_ph
 
         self.loss_in = [
             ("obs", obs_ph),
