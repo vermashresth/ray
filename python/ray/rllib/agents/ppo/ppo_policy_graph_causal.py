@@ -2,10 +2,11 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import copy
 import logging
+
 import numpy as np
 import tensorflow as tf
-
 import ray
 from ray.rllib.evaluation.postprocessing import compute_advantages
 from ray.rllib.evaluation.policy_graph import PolicyGraph
@@ -551,7 +552,8 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         }
         start_state = len(self.model.state_in)
         for i, v in enumerate(self.moa.state_in):
-            feed_dict[v] = [trajectory['state_in_' + str(i + start_state)][0, :]]
+            if 'state_in_' + str(i + start_state) in trajectory.keys():
+                feed_dict[v] = [trajectory['state_in_' + str(i + start_state)][0, :]]
         return self.sess.run([self.moa_preds, self.moa_action_probs], feed_dict)
 
     def get_action_probabilities(self, trajectory):
@@ -564,7 +566,8 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             self._prev_reward_input: trajectory['prev_rewards']
         }
         for i, v in enumerate(self.model.state_in):
-            feed_dict[v] = [trajectory['state_in_' + str(i)][0, :]]
+            if 'state_in_' + str(i) in trajectory.keys():
+                feed_dict[v] = [trajectory['state_in_' + str(i)][0, :]]
         return self.sess.run(self.action_probs, feed_dict)
 
     def get_agent_visibility_multiplier(self, trajectory):
