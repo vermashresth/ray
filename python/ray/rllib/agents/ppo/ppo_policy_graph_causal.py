@@ -268,7 +268,13 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         # Compute output size of model of other agents (MOA)
         self.num_actions = logit_dim * self.num_other_agents
         self.moa_dim = logit_dim * self.num_other_agents
-        self.moa = self.model.moa_model(self.moa_dim)
+        self.moa = self.model.moa_model({
+                "obs": obs_ph,
+                "others_actions": self.others_actions,
+                "prev_actions": prev_actions_ph,
+                "prev_rewards": prev_rewards_ph,
+                "is_training": self._get_is_training_placeholder(),
+            }, self.moa_dim, self.config["model"])
 
         # KL Coefficient
         self.kl_coeff = tf.get_variable(
