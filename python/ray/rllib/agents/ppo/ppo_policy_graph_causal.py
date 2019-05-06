@@ -329,6 +329,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             mask = tf.ones_like(adv_ph, dtype=tf.bool)
 
         # Setup the MOA loss
+        self.action_probs = tf.nn.softmax(self.model.outputs)
         self.moa_preds = tf.reshape(  # Reshape to [B,N,A]
             self.moa.outputs, [-1, self.num_other_agents, self.num_actions])
         self.moa_loss = MOALoss(self.moa_preds, self.others_actions,
