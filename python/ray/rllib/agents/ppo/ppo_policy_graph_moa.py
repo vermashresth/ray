@@ -382,7 +382,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             last_r = 0.0
         else:
             next_state = []
-            for i in range(len(self.rl_model.state_in)):
+            for i in range(len(self.model.state_in)):
                 next_state.append([sample_batch["state_out_{}".format(i)][-1]])
             prev_action = sample_batch['prev_actions'][-1]
             prev_reward = sample_batch['prev_rewards'][-1]

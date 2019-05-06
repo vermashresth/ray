@@ -424,7 +424,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             last_r = 0.0
         else:
             next_state = []
-            for i in range(len(self.rl_model.state_in)):
+            for i in range(len(self.model.state_in)):
                 next_state.append([sample_batch["state_out_{}".format(i)][-1]])
             prev_action = sample_batch['prev_actions'][-1]
             prev_reward = sample_batch['prev_rewards'][-1]
@@ -549,7 +549,7 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
             self._prev_action_input: trajectory['prev_actions'],
             self._prev_reward_input: trajectory['prev_rewards']
         }
-        start_state = len(self.rl_model.state_in)
+        start_state = len(self.model.state_in)
         for i, v in enumerate(self.moa.state_in):
             feed_dict[v] = [trajectory['state_in_' + str(i + start_state)][0, :]]
         return self.sess.run([self.moa_preds, self.moa_action_probs], feed_dict)
@@ -559,11 +559,11 @@ class PPOPolicyGraph(LearningRateSchedule, TFPolicyGraph):
         feed_dict = {
             self.observations: trajectory['obs'],
             self.others_actions: trajectory['others_actions'],
-            self.rl_model.seq_lens: [traj_len],
+            self.model.seq_lens: [traj_len],
             self._prev_action_input: trajectory['prev_actions'],
             self._prev_reward_input: trajectory['prev_rewards']
         }
-        for i, v in enumerate(self.rl_model.state_in):
+        for i, v in enumerate(self.model.state_in):
             feed_dict[v] = [trajectory['state_in_' + str(i)][0, :]]
         return self.sess.run(self.action_probs, feed_dict)
 
